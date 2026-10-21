@@ -1,0 +1,2 @@
+home loaded: 4 procs, private 217 MB, working set 496 MB [Browser:61 Tab:131 Utility(AudioService):10 Utility(VideoCaptureService):14]
+after 30s idle: 4 procs, private 201 MB, working set 444 MB [Browser:55 Tab:122 Utility(AudioService):10 Utility(VideoCaptureService):14]

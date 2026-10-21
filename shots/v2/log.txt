@@ -1,0 +1,12 @@
+home loaded: 2 procs, private 114 MB, working set 262 MB [Browser:67 Tab:46]
+home sections: Artists to watch out for | Curated by SoundCloud | SoundCloud's Power Playlists | Trending by genre
+search rows: 17
+playing: {"hasTrack":true,"title":"Dâu Hào Môn Lofi","artist":"Đây Bình","artwork":"https://i1.sndcdn.com/artworks-2sAZzlyoS5BihX2W-cfzNYA-t500x500.jpg","url":"https://soundcloud.com/y-b-nh-708353768/dau-hao-mon-lofi","playing":true,"position":10,"duration":244,"liked":false,"canLike":true,"shuffle":false,"repeat":"none"}
+after next: Giá Như Anh Là Em |Lofi .| - Lệ Quyên playing=true pos=7
+after seek: pos=111/216
+while playing: 3 procs, private 169 MB, working set 400 MB [Browser:61 Tab:98 Utility(AudioService):10]
+playlist: Buzzing Mexico rows=50
+artist: Autumn Andrea rows=28
+after browsing + 20s: 3 procs, private 132 MB, working set 345 MB [Browser:58 Tab:64 Utility(AudioService):10]
+state now: {"t":"Giá Như Anh Là Em |Lofi .| - Lệ Quyên","playing":true,"pos":150}
+console errors: []
