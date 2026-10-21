@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Soundfast</title>
+<style>
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: #111; color: #f4f1ee; display: grid; place-items: center;
+    font: 15px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  main { text-align: center; max-width: 420px; padding: 24px; }
+  .logo { width: 72px; height: 72px; border-radius: 18px; margin: 0 auto 20px;
+    background: linear-gradient(135deg, #ff7a2e, #e63b12); display: grid; place-items: center; }
+  h1 { font-size: 20px; margin: 0 0 8px; font-weight: 600; }
+  p { color: #a39e98; margin: 0 0 24px; }
+  button { background: #ff5f1f; color: #fff; border: 0; border-radius: 999px; padding: 10px 26px;
+    font: inherit; font-weight: 600; cursor: pointer; }
+  button:hover { background: #ff7438; }
+  small { display: block; margin-top: 18px; color: #6b6762; font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="logo"><svg width="34" height="34" viewBox="0 0 24 24" fill="#fff"><path d="M8 5.5v13l10-6.5z"/></svg></div>
+  <h1>Can't reach SoundCloud</h1>
+  <p>Check your internet connection. Soundfast will try again automatically.</p>
+  <button id="retry">Try again</button>
+  <small id="reason"></small>
+</main>
+<script>
+  const params = new URLSearchParams(location.search);
+  const target = /^https:\/\/([a-z0-9-]+\.)?soundcloud\.com\//i.test(params.get('retry') || '')
+    ? params.get('retry') : 'https://soundcloud.com/';
+  document.getElementById('reason').textContent = params.get('reason') || '';
+  const go = () => { location.href = target; };
+  document.getElementById('retry').onclick = go;
+  window.addEventListener('online', go);
+  setTimeout(go, 15000);
+</script>
+</body>
+</html>

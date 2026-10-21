@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<title>Soundfast mini player</title>
+<style>
+  :root {
+    --bg: #141414;
+    --text: #f4f1ee;
+    --muted: #a39e98;
+    --accent: #ff5f1f;
+    --track: rgba(255, 255, 255, 0.14);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.3 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+    -webkit-app-region: drag;
+    user-select: none;
+    position: relative;
+  }
+  .backdrop {
+    position: absolute; inset: -40px;
+    background-size: cover; background-position: center;
+    filter: blur(28px) saturate(1.3);
+    opacity: 0.32;
+    transition: background-image .4s;
+  }
+  .shade { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(20,20,20,.55), rgba(20,20,20,.85)); }
+  .wrap { position: relative; display: flex; gap: 14px; padding: 14px 14px 16px; height: 100%; }
+  .art {
+    width: 80px; height: 80px; flex: none; border-radius: 6px;
+    background: #2a2a2a center/cover no-repeat;
+    box-shadow: 0 4px 14px rgba(0,0,0,.45);
+    cursor: pointer; -webkit-app-region: no-drag;
+  }
+  .art.empty {
+    display: grid; place-items: center;
+    background: linear-gradient(135deg, #ff7a2e, #e63b12);
+  }
+  .art.empty svg { width: 34px; height: 34px; opacity: .95; }
+  .art:not(.empty) svg { display: none; }
+  .info { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: space-between; }
+  .meta { padding-right: 70px; }
+  .title { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .artist { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+  .controls { display: flex; align-items: center; gap: 6px; }
+  button {
+    -webkit-app-region: no-drag;
+    border: 0; background: transparent; color: var(--text);
+    width: 30px; height: 30px; border-radius: 50%;
+    display: grid; place-items: center; cursor: pointer;
+    transition: background .15s, transform .1s, color .15s;
+  }
+  button:hover { background: rgba(255,255,255,.1); }
+  button:active { transform: scale(.92); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button svg { width: 18px; height: 18px; fill: currentColor; }
+  button.play { width: 36px; height: 36px; background: var(--accent); color: #fff; }
+  button.play:hover { background: #ff7438; }
+  button.play svg { width: 18px; height: 18px; }
+  button.like svg path { fill: none; stroke: currentColor; stroke-width: 1.8; }
+  button.like.on { color: var(--accent); }
+  button.like.on svg path { fill: currentColor; }
+  .time { margin-left: auto; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .window-btns {
+    position: absolute; top: 8px; right: 8px; display: flex; gap: 2px;
+    opacity: 0; transition: opacity .15s;
+  }
+  body:hover .window-btns, .window-btns:focus-within { opacity: 1; }
+  .window-btns button { width: 24px; height: 24px; border-radius: 5px; color: var(--muted); }
+  .window-btns button:hover { color: var(--text); }
+  .window-btns button svg { width: 14px; height: 14px; }
+  .window-btns button.pin.on { color: var(--accent); }
+  .bar {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 10px;
+    -webkit-app-region: no-drag; cursor: pointer;
+    display: flex; align-items: flex-end;
+  }
+  .bar .rail { width: 100%; height: 3px; background: var(--track); transition: height .12s; }
+  .bar:hover .rail { height: 5px; }
+  .bar .fill { height: 100%; width: 0; background: var(--accent); }
+  .idle .controls button:not(.play) { opacity: .45; }
+</style>
+</head>
+<body class="idle">
+  <div class="backdrop" id="backdrop"></div>
+  <div class="shade"></div>
+  <div class="wrap">
+    <div class="art empty" id="art" title="Go to track">
+      <svg viewBox="0 0 24 24" fill="#fff"><path d="M8 5.5v13l10-6.5z"/></svg>
+    </div>
+    <div class="info">
+      <div class="meta">
+        <div class="title" id="title">Nothing playing</div>
+        <div class="artist" id="artist">Pick something on SoundCloud</div>
+      </div>
+      <div class="controls">
+        <button id="prev" title="Previous" aria-label="Previous track">
+          <svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5v14L9.5 12z"/></svg>
+        </button>
+        <button class="play" id="play" title="Play" aria-label="Play">
+          <svg viewBox="0 0 24 24" id="playIcon"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <button id="next" title="Next" aria-label="Next track">
+          <svg viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM4 5v14l10.5-7z"/></svg>
+        </button>
+        <button class="like" id="like" title="Like" aria-label="Like">
+          <svg viewBox="0 0 24 24"><path id="heart" d="M12 20.3l-1.3-1.2C5.9 14.8 3 12.2 3 8.9 3 6.3 5.1 4.2 7.6 4.2c1.5 0 3 .7 4 1.8 1-1.1 2.5-1.8 4-1.8 2.6 0 4.6 2.1 4.6 4.7 0 3.3-2.9 5.9-7.7 10.2z"/></svg>
+        </button>
+        <span class="time" id="time"></span>
+      </div>
+    </div>
+  </div>
+  <div class="window-btns">
+    <button class="pin" id="pin" title="Keep on top" aria-label="Keep on top">
+      <svg viewBox="0 0 24 24"><path d="M16 3l5 5-3 1-3.5 3.5.5 4.5-2 2-3.5-3.5L5 20l-1-1 4.5-4.5L5 11l2-2 4.5.5L15 6z"/></svg>
+    </button>
+    <button id="expand" title="Open Soundfast" aria-label="Open Soundfast">
+      <svg viewBox="0 0 24 24"><path d="M14 4h6v6h-2V7.4l-5.3 5.3-1.4-1.4L16.6 6H14zM4 6h7v2H6v10h10v-5h2v7H4z"/></svg>
+    </button>
+    <button id="close" title="Close mini player" aria-label="Close mini player">
+      <svg viewBox="0 0 24 24"><path d="M6.4 5L12 10.6 17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4L12 13.4 6.4 19 5 17.6 10.6 12 5 6.4z"/></svg>
+    </button>
+  </div>
+  <div class="bar" id="bar" title="Seek"><div class="rail"><div class="fill" id="fill"></div></div></div>
+<script src="mini.js"></script>
+</body>
+</html>

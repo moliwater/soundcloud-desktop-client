@@ -1,0 +1,73 @@
+{
+  "name": "soundfast",
+  "productName": "Soundfast",
+  "version": "1.0.0",
+  "description": "A lightweight desktop app for SoundCloud on Windows, macOS and Linux.",
+  "main": "src/main.js",
+  "homepage": "https://github.com/moliwater/soundcloud-desktop-client",
+  "author": "Soundfast contributors",
+  "license": "MIT",
+  "keywords": [
+    "soundcloud",
+    "music",
+    "desktop",
+    "electron",
+    "windows"
+  ],
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --publish never",
+    "dist:win": "electron-builder --win --publish never",
+    "dist:mac": "electron-builder --mac --publish never",
+    "dist:linux": "electron-builder --linux --publish never"
+  },
+  "devDependencies": {
+    "electron": "^44.9.2",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.soundfast.app",
+    "productName": "Soundfast",
+    "copyright": "Soundfast contributors, MIT License",
+    "files": [
+      "package.json",
+      "src/**",
+      "assets/**",
+      "!assets/icon-1024.png"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Soundfast",
+      "artifactName": "Soundfast-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Soundfast-Portable-${version}.${ext}"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon-1024.png",
+      "category": "public.app-category.music"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "assets/icon-1024.png",
+      "category": "Audio"
+    }
+  }
+}
