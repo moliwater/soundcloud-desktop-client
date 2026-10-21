@@ -17,6 +17,7 @@ const DEFAULTS = {
   repeat: 'none',
   theme: 'charcoal',
   accent: 'green',
+  panelOpen: true,
   scClientId: null,
   zoom: 1,
   windowBounds: null,

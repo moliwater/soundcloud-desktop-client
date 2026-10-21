@@ -618,7 +618,18 @@ async function attach(s) {
 }
 
 audio.addEventListener('ended', () => P.next(true));
-audio.addEventListener('durationchange', () => { if (isFinite(audio.duration) && audio.duration > 0) $('t2').textContent = fmt(audio.duration); });
+audio.addEventListener('durationchange', () => {
+  if (isFinite(audio.duration) && audio.duration > 0) $('t2').textContent = $('bb-t2').textContent = fmt(audio.duration);
+});
+function updateProgressBar() {
+  const t = P.current();
+  const dur = audio.duration && isFinite(audio.duration) ? audio.duration : (t && t.duration) || 0;
+  const pct = dur && t ? Math.min(100, (audio.currentTime / dur) * 100) : 0;
+  $('bb-fill').style.width = pct + '%';
+  $('bb-knob').style.left = pct + '%';
+  $('bb-t1').textContent = fmt(t ? audio.currentTime : 0);
+  $('bb-bar').setAttribute('aria-valuenow', String(Math.round(pct)));
+}
 audio.addEventListener('play', () => { updatePlayIcon(); sendState(); });
 audio.addEventListener('pause', () => { updatePlayIcon(); sendState(); saveSession(); });
 audio.addEventListener('error', () => {
@@ -635,7 +646,8 @@ audio.addEventListener('timeupdate', () => {
   if (now - lastTick < 250) return;
   lastTick = now;
   $('t1').textContent = fmt(audio.currentTime);
-  drawWave();
+  if (settings.panelOpen !== false) drawWave();
+  updateProgressBar();
   if (!P.recorded && audio.currentTime > 5 && P.current()) { P.recorded = true; sf.api('recordPlay', P.current().id).catch(() => {}); }
   if (now - lastStateSent > 1000) sendState();
   if ('mediaSession' in navigator && isFinite(audio.duration)) {
@@ -646,13 +658,28 @@ audio.addEventListener('timeupdate', () => {
 audio.addEventListener('volumechange', () => { updateVolume(); localStorage.setItem('sf.volume', String(audio.volume)); localStorage.setItem('sf.muted', audio.muted ? '1' : ''); });
 
 // ---------------------------------------------------------------------------
-// Now playing panel
+// Now playing panel (closeable; when closed, a playback bar shows at the bottom)
 // ---------------------------------------------------------------------------
+function applyPanel() {
+  const open = settings.panelOpen !== false;
+  document.querySelector('.app').classList.toggle('panel-closed', !open);
+  if (open) drawWave();
+}
+function setPanel(open) {
+  settings.panelOpen = open;
+  applyPanel();
+  sf.setSetting('panelOpen', open);
+}
+$('close-panel').onclick = () => setPanel(false);
+$('bb-open').onclick = () => setPanel(true);
+$('bb-art').onclick = () => setPanel(true);
 function updatePlayIcon() {
   const playing = !audio.paused;
-  $('play').innerHTML = icon(playing ? 'pause' : 'play');
-  $('play').title = playing ? 'Pause' : 'Play';
-  $('play').setAttribute('aria-label', $('play').title);
+  for (const id of ['play', 'bb-play']) {
+    $(id).innerHTML = icon(playing ? 'pause' : 'play');
+    $(id).title = playing ? 'Pause' : 'Play';
+    $(id).setAttribute('aria-label', $(id).title);
+  }
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = P.current() ? (playing ? 'playing' : 'paused') : 'none';
 }
 
@@ -677,11 +704,23 @@ function updateNow() {
     $('np-artist').textContent = 'Pick a track to start';
     delete $('np-artist').dataset.go;
   }
-  $('np-like').classList.toggle('on', !!(t && liked.has(t.id)));
-  $('shuffle').classList.toggle('on', !!settings.shuffle);
-  $('repeat').classList.toggle('on', P.repeat !== 'none');
-  $('repeat').classList.toggle('rep1', P.repeat === 'one');
-  $('repeat').title = { none: 'Repeat', all: 'Repeat all', one: 'Repeat one' }[P.repeat];
+  const bbArt = $('bb-art');
+  bbArt.style.backgroundImage = t && t.artwork ? `url('${img(t.artwork, 't120x120')}')` : '';
+  bbArt.innerHTML = t && t.artwork ? '' : icon('disc');
+  $('bb-title').textContent = t ? t.title : 'Nothing playing';
+  $('bb-title').title = t ? t.title : '';
+  $('bb-artist').textContent = t ? t.artist : '';
+  if (t) $('bb-artist').dataset.go = `artist:${t.user.id}`;
+  else delete $('bb-artist').dataset.go;
+  if (t) $('bb-t2').textContent = fmt(t.duration);
+  for (const id of ['np-like', 'bb-like']) $(id).classList.toggle('on', !!(t && liked.has(t.id)));
+  for (const p of ['', 'bb-']) {
+    $(p + 'shuffle').classList.toggle('on', !!settings.shuffle);
+    $(p + 'repeat').classList.toggle('on', P.repeat !== 'none');
+    $(p + 'repeat').classList.toggle('rep1', P.repeat === 'one');
+    $(p + 'repeat').title = { none: 'Repeat', all: 'Repeat all', one: 'Repeat one' }[P.repeat];
+  }
+  updateProgressBar();
   updatePlayIcon();
   renderQueue();
   setMediaSession(t);
@@ -746,12 +785,41 @@ window.addEventListener('resize', () => drawWave());
 
 function updateVolume() {
   const v = audio.muted ? 0 : audio.volume;
-  $('vol').value = v;
-  $('vol').style.setProperty('--v', `${v * 100}%`);
-  $('vol-btn').innerHTML = icon(v === 0 ? 'mute' : 'volume');
+  for (const p of ['', 'bb-']) {
+    $(p + 'vol').value = v;
+    $(p + 'vol').style.setProperty('--v', `${v * 100}%`);
+    $(p + 'vol-btn').innerHTML = icon(v === 0 ? 'mute' : 'volume');
+  }
 }
 $('vol').addEventListener('input', (e) => { audio.muted = false; audio.volume = Number(e.target.value); });
 $('vol-btn').onclick = () => { audio.muted = !audio.muted; };
+$('bb-vol').addEventListener('input', (e) => { audio.muted = false; audio.volume = Number(e.target.value); });
+$('bb-vol-btn').onclick = () => { audio.muted = !audio.muted; };
+$('bb-play').onclick = () => P.toggle();
+$('bb-next').onclick = () => P.next();
+$('bb-prev').onclick = () => P.prev();
+$('bb-shuffle').onclick = () => P.setShuffle(!settings.shuffle);
+$('bb-repeat').onclick = () => P.cycleRepeat();
+$('bb-like').onclick = () => P.current() && toggleLike(P.current().id);
+$('bb-mini').onclick = () => sf.toggleMini();
+// Seek by clicking or dragging the bottom progress bar, or with arrow keys.
+(() => {
+  const bar = $('bb-bar');
+  const at = (e) => { const r = bar.getBoundingClientRect(); return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); };
+  bar.addEventListener('pointerdown', (e) => {
+    if (!P.current()) return;
+    bar.setPointerCapture(e.pointerId);
+    P.seek(at(e));
+    const move = (ev) => P.seek(at(ev));
+    const up = () => { bar.removeEventListener('pointermove', move); bar.removeEventListener('pointerup', up); };
+    bar.addEventListener('pointermove', move);
+    bar.addEventListener('pointerup', up);
+  });
+  bar.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight') audio.currentTime = Math.min(audio.currentTime + 5, audio.duration || audio.currentTime);
+    if (e.key === 'ArrowLeft') audio.currentTime = Math.max(0, audio.currentTime - 5);
+  });
+})();
 $('play').onclick = () => P.toggle();
 $('next').onclick = () => P.next();
 $('prev').onclick = () => P.prev();
@@ -820,6 +888,7 @@ sf.onCommand((name, arg) => {
     case 'focusSearch': return focusSearch();
     case 'copyLink': if (t) { sf.copy(t.url); toast('Link copied'); } return;
     case 'openUrl': return openSoundCloudUrl(arg);
+    case 'togglePanel': return setPanel(settings.panelOpen === false);
     case 'nav':
       if (arg === 'back') return router.back();
       if (arg === 'forward') return router.forward();
@@ -850,6 +919,14 @@ $('repeat').innerHTML = icon('repeat');
 $('np-like').innerHTML = icon('heart');
 $('open-sc').innerHTML = icon('external');
 $('mini').innerHTML = icon('mini');
+$('close-panel').innerHTML = icon('close');
+$('bb-shuffle').innerHTML = icon('shuffle');
+$('bb-prev').innerHTML = icon('prev');
+$('bb-next').innerHTML = icon('next');
+$('bb-repeat').innerHTML = icon('repeat');
+$('bb-like').innerHTML = icon('heart');
+$('bb-mini').innerHTML = icon('mini');
+$('bb-open').innerHTML = icon('panel');
 
 // ---------------------------------------------------------------------------
 // Remember the queue between launches
@@ -890,6 +967,7 @@ window.addEventListener('beforeunload', saveSession);
   document.documentElement.classList.toggle('mac', platform === 'darwin');
   P.repeat = settings.repeat || 'none';
   applyTheme();
+  applyPanel();
   restoreSession();
   renderSidebar();
   updateNow();

@@ -589,6 +589,7 @@ function buildAppMenu() {
       label: 'Soundfast',
       submenu: [
         { label: 'Mini player', accelerator: 'CmdOrCtrl+M', click: toggleMini },
+        { label: 'Show / hide Now playing', accelerator: 'CmdOrCtrl+B', click: () => command('togglePanel') },
         { label: 'Settings', submenu: settingsMenu() },
         { type: 'separator' },
         { label: 'Quit', accelerator: 'CmdOrCtrl+Q', click: quit },
@@ -668,7 +669,7 @@ function nav(page) {
 
 const SETTING_KEYS = new Set([
   'theme', 'accent', 'discordPresence', 'notifications', 'autoplay', 'closeToTray', 'miniAlwaysOnTop',
-  'openAtLogin', 'taskbarProgress', 'lowMemory', 'shuffle', 'repeat',
+  'openAtLogin', 'taskbarProgress', 'lowMemory', 'shuffle', 'repeat', 'panelOpen',
 ]);
 
 function applySetting(key, value, after) {

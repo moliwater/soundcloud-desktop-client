@@ -5,7 +5,7 @@
 ## Features
 
 - **Its own interface.** Home with SoundCloud's recommendations, your feed, search, liked tracks, playlists and albums, recently played, following, artist pages and playlist pages.
-- **Now playing panel.** Big artwork, the track's real SoundCloud waveform as the progress bar, shuffle, repeat, like, volume and an Up next list.
+- **Now playing panel.** Big artwork, the track's real SoundCloud waveform as the progress bar, shuffle, repeat, like, volume and an Up next list. Close it (or press `Ctrl+B`) for more room: a compact playback bar with the artwork, track name, a seekable progress bar and the controls appears at the bottom instead.
 - **Themes.** Charcoal, Midnight, True black and Light, each with six accent colors (green, orange, blue, purple, pink, red). Change them in Settings; they switch instantly.
 - **Your SoundCloud account.** Sign in once with your normal SoundCloud login (email, Google, Facebook or Apple). Likes you add or remove in Soundfast are saved to your account.
 - **Keeps the music going.** When your queue ends, similar tracks keep playing (can be turned off). Your queue is remembered between launches.
@@ -56,6 +56,7 @@ Output goes to `dist/`. The included workflow (`.github/workflows/release.yml`) 
 | `Ctrl+S` / `Ctrl+E` | Shuffle / repeat |
 | `Ctrl+L` or `/` | Search |
 | `Ctrl+M` | Mini player |
+| `Ctrl+B` | Show / hide the Now playing panel |
 | `Ctrl+Shift+H` | Home |
 | `Ctrl+Shift+F` | Feed |
 | `Ctrl+Shift+L` | Liked tracks |
