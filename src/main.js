@@ -354,6 +354,26 @@ function blurImage(img, radius) {
   return nativeImage.createFromBitmap(a, { width: w, height: h });
 }
 
+// Blur strength 1-100 maps to a blur radius on the small (480px) copy.
+const blurRadius = () => Math.max(1, Math.round((store.get('bgBlurAmount') ?? 40) * 0.24));
+
+function writeBlurred(img) {
+  const s = img.getSize();
+  const small = img.resize({ width: 480, height: Math.max(1, Math.round((480 * s.height) / s.width)), quality: 'better' });
+  fs.writeFileSync(bgFile('background-blur.jpg'), blurImage(small, blurRadius()).toJPEG(86));
+}
+
+// Re-blur after the strength slider moves (a few milliseconds on the small copy).
+function reblurBackground() {
+  if (!store.get('bgImage') || !fs.existsSync(bgFile())) return;
+  const img = nativeImage.createFromPath(bgFile());
+  if (img.isEmpty()) return;
+  writeBlurred(img);
+  const version = Date.now();
+  store.set('bgImage', version);
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('settings:changed', { bgImage: version });
+}
+
 async function chooseBackground() {
   const res = await dialog.showOpenDialog(mainWindow, {
     title: 'Choose a background image',
@@ -373,9 +393,7 @@ async function chooseBackground() {
   // A pre-blurred copy for "Blur background", made once here so the window
   // never runs a live blur effect. It is small; the window stretches it, which
   // looks smooth because the picture is already soft.
-  const s = img.getSize();
-  const small = img.resize({ width: 480, height: Math.max(1, Math.round((480 * s.height) / s.width)), quality: 'better' });
-  fs.writeFileSync(bgFile('background-blur.jpg'), blurImage(small, 9).toJPEG(86));
+  writeBlurred(img);
   const version = Date.now();
   applySetting('bgImage', version);
   return version;
@@ -758,16 +776,18 @@ function nav(page) {
 const SETTING_KEYS = new Set([
   'theme', 'accent', 'discordPresence', 'notifications', 'autoplay', 'closeToTray', 'miniAlwaysOnTop',
   'openAtLogin', 'taskbarProgress', 'lowMemory', 'shuffle', 'repeat', 'panelOpen',
-  'accentCustom', 'bgImage', 'bgBlur', 'bgDim',
+  'accentCustom', 'bgImage', 'bgBlur', 'bgDim', 'bgBlurAmount',
 ]);
 
 function applySetting(key, value, after) {
   if (!SETTING_KEYS.has(key)) return;
   if (key === 'accentCustom' && !/^#[0-9a-f]{6}$/i.test(String(value))) return;
   if (key === 'bgDim') value = Math.max(0, Math.min(85, Math.round(Number(value) || 0)));
+  if (key === 'bgBlurAmount') value = Math.max(1, Math.min(100, Math.round(Number(value) || 1)));
   const before = store.get(key);
   store.set(key, value);
   if (key === 'theme' || key === 'bgImage') applyTheme();
+  if (key === 'bgBlurAmount') reblurBackground();
   if (key === 'discordPresence') {
     if (value) {
       presence?.start();

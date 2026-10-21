@@ -22,6 +22,7 @@ const DEFAULTS = {
   bgImage: null,
   bgBlur: true,
   bgDim: 45,
+  bgBlurAmount: 40,
   scClientId: null,
   zoom: 1,
   windowBounds: null,

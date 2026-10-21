@@ -336,6 +336,7 @@ const PAGES = {
         <div><div class="help" style="color:var(--muted);font-size:12.5px;margin-bottom:10px">Use one of your own pictures (PNG or JPG) as the app background. Soundfast keeps its own copy, sized to your screen.</div>
         <div class="btns"><button class="btn primary" data-bg="choose">${settings.bgImage ? 'Change image' : 'Choose image'}</button>${settings.bgImage ? '<button class="btn ghost" data-bg="clear">Remove</button>' : ''}</div></div></div>
       ${settings.bgImage ? `${tog('bgBlur', 'Blur background', 'Softens the picture so text stays easy to read.')}
+      ${settings.bgBlur !== false ? `<div class="range-row"><div class="lbl">Blur strength</div><input type="range" min="1" max="100" step="1" value="${settings.bgBlurAmount ?? 40}" data-range="bgBlurAmount" aria-label="Blur strength"><output>${settings.bgBlurAmount ?? 40}%</output></div>` : ''}
       <div class="range-row"><div class="lbl">Darken background</div><input type="range" min="0" max="85" step="1" value="${settings.bgDim ?? 45}" data-range="bgDim" aria-label="Darken background"><output>${settings.bgDim ?? 45}%</output></div>` : ''}
       <h2>Playback</h2>
       ${tog('discordPresence', "Show what I'm listening to on Discord", 'Shows the track on your Discord profile while it plays.')}
@@ -507,12 +508,22 @@ async function rerenderSettings() {
 }
 
 // Live sliders and the custom color picker on the Settings page.
+let blurTimer = null;
+let lastBlurSent = 0;
 view.addEventListener('input', (e) => {
   const el = e.target;
   if (el.dataset.range === 'bgDim') {
     el.nextElementSibling.textContent = el.value + '%';
     settings.bgDim = Number(el.value);
     applyTheme();
+  }
+  if (el.dataset.range === 'bgBlurAmount') {
+    el.nextElementSibling.textContent = el.value + '%';
+    settings.bgBlurAmount = Number(el.value);
+    // Re-blur while dragging, at most a few times a second.
+    clearTimeout(blurTimer);
+    const since = performance.now() - lastBlurSent;
+    blurTimer = setTimeout(() => { lastBlurSent = performance.now(); sf.setSetting('bgBlurAmount', settings.bgBlurAmount); }, since > 150 ? 0 : 150 - since);
   }
   if (el.id === 'accent-input') {
     settings.accent = 'custom';

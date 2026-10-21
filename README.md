@@ -7,7 +7,7 @@
 - **Its own interface.** Home with SoundCloud's recommendations, your feed, search, liked tracks, playlists and albums, recently played, following, artist pages and playlist pages.
 - **Now playing panel.** Big artwork, the track's real SoundCloud waveform as the progress bar, shuffle, repeat, like, volume and an Up next list. Close it (or press `Ctrl+B`) for more room: a compact playback bar with the artwork, track name, a seekable progress bar and the controls appears at the bottom instead.
 - **Themes.** Charcoal, Midnight, True black and Light, with six accent colors or any color you pick yourself. Change them in Settings; they switch instantly.
-- **Your own background.** Use one of your own pictures (PNG or JPG) as the app background, with a blur switch and a darken slider so text stays readable. Soundfast keeps its own copy sized to your screen, and pre-blurs it once, so a background adds only about 9 MB of memory.
+- **Your own background.** Use one of your own pictures (PNG or JPG) as the app background, with a blur switch, a blur strength slider and a darken slider so text stays readable. Soundfast keeps its own copy sized to your screen, and pre-blurs it once, so a background adds only about 9 MB of memory.
 - **Your SoundCloud account.** Sign in once with your normal SoundCloud login (email, Google, Facebook or Apple). Likes you add or remove in Soundfast are saved to your account.
 - **Keeps the music going.** When your queue ends, similar tracks keep playing (can be turned off). Your queue is remembered between launches.
 - **No ads.** Soundfast only plays the music, so there are no audio or banner ads.
@@ -78,7 +78,7 @@ On macOS use `Cmd` instead of `Ctrl`.
 Open **Settings** at the bottom of the sidebar (or right-click the tray icon → Settings):
 
 - Theme and accent color (including a custom color picker)
-- Background image, blur on/off, and how much to darken it
+- Background image, blur on/off, blur strength, and how much to darken it
 - Show what I'm listening to on Discord — on by default
 - Track change notifications — on by default
 - Keep playing similar tracks when the queue ends — on by default
