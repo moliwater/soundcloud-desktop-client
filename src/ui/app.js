@@ -115,6 +115,10 @@ let renderToken = 0;
 const lists = new Map(); // list id -> tracks, for click-to-play
 let listSeq = 0;
 function regList(tracks) { const id = 'l' + ++listSeq; lists.set(id, tracks); return id; }
+// Lists that have more tracks on SoundCloud than are shown: their next link,
+// and (once fetched) the rest of the tracks, kept in memory.
+const listNext = new Map();
+const restLoads = new Map();
 
 const NEEDS_LOGIN = new Set(['feed', 'likes', 'library', 'history', 'following']);
 
@@ -123,6 +127,8 @@ async function render() {
   if (!r) return;
   const token = ++renderToken;
   lists.clear();
+  listNext.clear();
+  restLoads.clear();
   markNav();
   $('back').disabled = router.idx <= 0;
   $('fwd').disabled = router.idx >= router.stack.length - 1;
@@ -200,6 +206,7 @@ function trackRows(tracks, { offset = 0, listId, extra } = {}) {
 
 function listBlock(tracks, next, opts = {}) {
   const lid = regList(tracks);
+  if (next) listNext.set(lid, next);
   return `<div class="list" data-list="${lid}">${trackRows(tracks, { listId: lid, ...opts })}</div>${next ? moreBtn(next, lid) : ''}`;
 }
 
@@ -269,6 +276,7 @@ const PAGES = {
     const res = await sf.api('likes');
     if (!res.items.length) return `<h1 class="view-title">Liked tracks</h1>` + empty('heart', 'No likes yet', 'Tap the heart on any track to save it here.');
     const lid = regList(res.items);
+    if (res.next) listNext.set(lid, res.next);
     return `<div class="page-head"><div class="cover liked-cover">${icon('heart')}</div><div><div class="kind">Your library</div><h1>Liked tracks</h1><div class="meta">${esc(me.name)}</div><div class="actions"><button class="btn primary" data-playall="${lid}">${icon('play')}Play</button><button class="btn ghost" data-shuffleall="${lid}">${icon('shuffle')}Shuffle</button></div></div></div>
       <div class="list" data-list="${lid}">${trackRows(res.items, { listId: lid })}</div>${res.next ? moreBtn(res.next, lid) : ''}`;
   },
@@ -423,8 +431,8 @@ document.addEventListener('click', async (e) => {
     return;
   }
   if (d.bg === 'clear') { await sf.clearBackground(); settings.bgImage = null; applyTheme(); return rerenderSettings(); }
-  if (d.playall) return P.playList(lists.get(d.playall), 0, false);
-  if (d.shuffleall) return P.playList(lists.get(d.shuffleall), 0, true);
+  if (d.playall) return playFromList(d.playall, 0, false);
+  if (d.shuffleall) return playFromList(d.shuffleall, 0, true);
   if (d.playlist || d.playlistNow) {
     e.stopPropagation();
     try {
@@ -443,8 +451,7 @@ document.addEventListener('click', async (e) => {
   }
   if (d.play) {
     const [lid, i] = d.play.split(':');
-    const list = lists.get(lid) || [];
-    return P.playList(list, Number(i), false);
+    return playFromList(lid, Number(i), false);
   }
 });
 
@@ -623,17 +630,67 @@ function showCreateForm(trackId) {
   $('pl-title').focus();
 }
 
+// Fetches every remaining track of a list once (for Play / Shuffle all).
+function loadRest(lid) {
+  if (restLoads.has(lid)) return restLoads.get(lid);
+  const list = lists.get(lid);
+  const next = listNext.get(lid);
+  if (!list || !next) return Promise.resolve(list || []);
+  const job = sf.api('allTracks', next).then((res) => {
+    const have = new Set(list.map((t) => t.id));
+    for (const t of res.items) if (!have.has(t.id)) { have.add(t.id); list.push(t); }
+    listNext.delete(lid);
+    return list;
+  });
+  restLoads.set(lid, job);
+  job.catch(() => restLoads.delete(lid));
+  return job;
+}
+
+// Plays a list from one track. Lists with more tracks than are shown get the
+// rest too: Shuffle waits for them (so it picks from everything); Play starts
+// right away and adds the rest to the queue as it arrives.
+async function playFromList(lid, start, shuffle) {
+  const list = lists.get(lid);
+  if (!list || !list.length) return;
+  const more = listNext.has(lid) || restLoads.has(lid);
+  if (shuffle && more) {
+    toast('Loading all tracks to shuffle…');
+    try { await loadRest(lid); } catch { toast("Couldn't load everything; shuffling what's shown"); }
+    toast(`Shuffling ${plural(list.length, 'track')}`);
+    return P.playList(list, 0, true);
+  }
+  P.playList(list, start, shuffle);
+  if (!more) return;
+  const queueId = P.queueId;
+  const before = list.length;
+  try { await loadRest(lid); } catch { return; }
+  if (P.queueId === queueId) P.appendTracks(list.slice(before));
+}
+
 async function loadMore(btn, next, lid) {
   btn.disabled = true;
   try {
-    const res = await sf.api('more', next);
     const list = lists.get(lid) || [];
-    const tracks = res.items.filter((x) => x.kind === 'track');
-    const offset = list.length;
-    list.push(...tracks);
     const box = view.querySelector(`.list[data-list="${lid}"]`);
+    let tracks;
+    let hasMore;
+    if (restLoads.has(lid)) {
+      // Everything is already loaded for playback: show the next rows from memory.
+      await restLoads.get(lid);
+      const shown = box.querySelectorAll('.row').length;
+      tracks = list.slice(shown, shown + 40);
+      hasMore = shown + tracks.length < list.length;
+    } else {
+      const res = await sf.api('more', next);
+      tracks = res.items.filter((x) => x.kind === 'track');
+      list.push(...tracks);
+      hasMore = !!res.next;
+      if (res.next) { listNext.set(lid, res.next); btn.dataset.more = res.next; } else listNext.delete(lid);
+    }
+    const offset = box.querySelectorAll('.row').length;
     box.insertAdjacentHTML('beforeend', trackRows(tracks, { listId: lid, offset }).replace(new RegExp(`data-play="${lid}:(\\d+)"`, 'g'), (_, n) => `data-play="${lid}:${Number(n) + offset}"`));
-    if (res.next) { btn.dataset.more = res.next; btn.disabled = false; } else btn.remove();
+    if (hasMore) btn.disabled = false; else btn.remove();
   } catch { btn.disabled = false; toast("Couldn't load more"); }
 }
 
@@ -817,8 +874,11 @@ const P = {
 
   current() { return this.queue[this.index] || null; },
 
+  queueId: 0,
+
   playList(list, start = 0, shuffle = false) {
     if (!list || !list.length) return;
+    this.queueId++;
     this.queue = list.slice();
     this.index = start;
     if (shuffle) {
@@ -829,6 +889,24 @@ const P = {
     this.order = null;
     if (settings.shuffle) this.makeOrder();
     this.load(this.index, true);
+  },
+
+  // Adds tracks to the end of the queue; with shuffle on they are mixed in at
+  // random places among the tracks still to come.
+  appendTracks(tracks) {
+    const have = new Set(this.queue.map((t) => t.id));
+    const add = tracks.filter((t) => t && !have.has(t.id));
+    if (!add.length) return;
+    const start = this.queue.length;
+    this.queue.push(...add);
+    if (this.order) {
+      const pos = this.order.indexOf(this.index);
+      for (let k = 0; k < add.length; k++) {
+        const at = pos + 1 + Math.floor(Math.random() * (this.order.length - pos));
+        this.order.splice(at, 0, start + k);
+      }
+    }
+    renderQueue();
   },
 
   makeOrder() {

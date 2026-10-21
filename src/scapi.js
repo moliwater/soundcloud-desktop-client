@@ -378,6 +378,27 @@ const methods = {
     return { ...user(u), top: page(top, track).items, latest: page(all, track) };
   },
 
+  // Every remaining track after a "Show more" link, fetched 200 at a time,
+  // so Play and Shuffle can use a whole list (likes, history, feed, ...).
+  async allTracks(next, max = 10000) {
+    const big = (u) => (/[?&]limit=\d+/.test(u) ? u.replace(/([?&])limit=\d+/, '$1limit=200') : u + (u.includes('?') ? '&' : '?') + 'limit=200');
+    const out = [];
+    const seen = new Set();
+    let url = next ? big(next) : null;
+    while (url && out.length < max) {
+      const res = await request(url);
+      for (const x of res.collection || []) {
+        const t = item(x.track || x.playlist || x);
+        if (t && t.kind === 'track' && !seen.has(t.id)) {
+          seen.add(t.id);
+          out.push(t);
+        }
+      }
+      url = res.next_href ? big(res.next_href) : null;
+    }
+    return { items: out.slice(0, max), truncated: !!url };
+  },
+
   async more(next) {
     // Generic "load more" for any next_href.
     const res = await request(next);
