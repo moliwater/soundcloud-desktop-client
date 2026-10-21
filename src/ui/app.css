@@ -120,7 +120,7 @@ button, input, a, .row, .card, .wave { -webkit-app-region: no-drag; }
 .searchbox:focus-within { box-shadow: 0 0 0 2px var(--accent); }
 .icon-btn { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); }
 .icon-btn:hover { color: var(--text); background: var(--card); }
-.view { flex: 1; overflow-y: auto; padding: 10px 28px 40px 20px; scroll-behavior: smooth; }
+.view { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 10px 28px 40px 20px; scroll-behavior: smooth; }
 .view::-webkit-scrollbar, .queue::-webkit-scrollbar, .sidebar::-webkit-scrollbar { width: 10px; }
 .view::-webkit-scrollbar-thumb, .queue::-webkit-scrollbar-thumb, .sidebar::-webkit-scrollbar-thumb { background: var(--line); border-radius: 10px; border: 3px solid var(--bg); }
 
@@ -134,7 +134,7 @@ button, input, a, .row, .card, .wave { -webkit-app-region: no-drag; }
 .hero-title { font-size: 26px; font-weight: 750; line-height: 1.15; letter-spacing: -.01em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .hero-sub { font-size: 13px; opacity: .8; margin-top: 4px; }
 .hero-btn { position: absolute; right: 26px; bottom: 26px; z-index: 2; display: none; }
-.btn { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 20px; border-radius: 999px; font-weight: 650; }
+.btn { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 20px; border-radius: 999px; font-weight: 650; white-space: nowrap; flex: none; }
 .btn.primary { background: var(--accent); color: var(--accent-ink); }
 .btn.primary:hover { filter: brightness(1.08); }
 .btn.ghost { box-shadow: inset 0 0 0 1.5px currentColor; }
@@ -196,7 +196,7 @@ button, input, a, .row, .card, .wave { -webkit-app-region: no-drag; }
 .page-head .kind { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
 .page-head h1 { font-size: 34px; font-weight: 780; line-height: 1.1; letter-spacing: -.02em; margin-bottom: 8px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .page-head .meta { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
-.page-head .actions { display: flex; gap: 10px; }
+.page-head .actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .view-title { font-size: 26px; font-weight: 760; letter-spacing: -.015em; margin: 6px 0 20px; }
 .pills { display: flex; gap: 8px; margin-bottom: 22px; flex-wrap: wrap; }
 .pills button { height: 32px; padding: 0 14px; border-radius: 999px; background: var(--card); color: var(--muted); font-weight: 600; font-size: 13px; }
@@ -413,3 +413,16 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--accent); 
 .seg button.on { background: var(--text); color: var(--bg); }
 .create-form .row-btns { display: flex; justify-content: flex-end; gap: 10px; }
 .dialog .hint { color: var(--muted); font-size: 13px; padding: 10px; }
+
+/* smaller windows: compact page headers so buttons fit */
+@media (max-width: 1240px) {
+  .page-head { gap: 20px; }
+  .page-head .cover { width: 140px; height: 140px; }
+  .page-head h1 { font-size: 28px; }
+  .page-head .actions { gap: 8px; }
+  .page-head .actions .btn { height: 34px; padding: 0 14px; font-size: 13px; }
+}
+@media (max-width: 1060px) {
+  .page-head { align-items: flex-start; }
+  .page-head .cover { width: 112px; height: 112px; }
+}
