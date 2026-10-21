@@ -19,6 +19,7 @@ const plural = (n, w) => `${num(n)} ${w}${n === 1 ? '' : 's'}`;
 let me = null;
 let loggedIn = false;
 let liked = new Set();
+let reposted = new Set();
 let settings = {};
 let platform = 'win32';
 
@@ -70,7 +71,7 @@ function applyTheme() {
 // Sidebar
 // ---------------------------------------------------------------------------
 const NAV_MAIN = [['home', 'Home', 'home'], ['feed', 'Feed', 'feed'], ['search', 'Search', 'search']];
-const NAV_LIB = [['likes', 'Liked tracks', 'heart'], ['library', 'Playlists', 'playlists'], ['history', 'Recently played', 'history'], ['following', 'Following', 'users']];
+const NAV_LIB = [['likes', 'Liked tracks', 'heart'], ['reposts', 'Reposts', 'repost'], ['library', 'Playlists', 'playlists'], ['history', 'Recently played', 'history'], ['following', 'Following', 'users']];
 
 function renderSidebar() {
   const navBtn = ([id, label, ic]) => `<button data-nav="${id}" title="${label}">${icon(ic)}<span>${label}</span></button>`;
@@ -120,7 +121,7 @@ function regList(tracks) { const id = 'l' + ++listSeq; lists.set(id, tracks); re
 const listNext = new Map();
 const restLoads = new Map();
 
-const NEEDS_LOGIN = new Set(['feed', 'likes', 'library', 'history', 'following']);
+const NEEDS_LOGIN = new Set(['feed', 'likes', 'reposts', 'library', 'history', 'following']);
 
 async function render() {
   const r = router.current();
@@ -281,6 +282,19 @@ const PAGES = {
       <div class="list" data-list="${lid}">${trackRows(res.items, { listId: lid })}</div>${res.next ? moreBtn(res.next, lid) : ''}`;
   },
 
+  async reposts() {
+    const res = await sf.api('reposts');
+    if (!res.items.length) return `<h1 class="view-title">Reposts</h1>` + empty('repost', 'No reposts yet', 'Repost a track to share it with your followers: use the repost button in Now playing, or right-click any track. Your reposts show up here.');
+    const tracks = res.items.filter((x) => x.kind === 'track');
+    const others = res.items.filter((x) => x.kind !== 'track');
+    const lid = regList(tracks);
+    if (res.next) listNext.set(lid, res.next);
+    let html = `<div class="page-head"><div class="cover liked-cover">${icon('repost')}</div><div><div class="kind">Your library</div><h1>Reposts</h1><div class="meta">${esc(me.name)} · shared with your followers</div><div class="actions">${tracks.length ? `<button class="btn primary" data-playall="${lid}">${icon('play')}Play</button><button class="btn ghost" data-shuffleall="${lid}">${icon('shuffle')}Shuffle</button>` : ''}</div></div></div>`;
+    if (others.length) html += section('Playlists and albums', cards(others));
+    if (tracks.length || res.next) html += `<div class="list" data-list="${lid}">${trackRows(tracks, { listId: lid })}</div>${res.next ? moreBtn(res.next, lid) : ''}`;
+    return html;
+  },
+
   async library() {
     const res = await sf.api('library');
     const html = `<div class="section-head" style="align-items:center"><h1 class="view-title">Playlists and albums</h1><button class="btn primary" data-newpl="1">${icon('plus')}New playlist</button></div>`;
@@ -321,6 +335,8 @@ const PAGES = {
       <div class="actions">${a.top.length ? `<button class="btn primary" data-playall="${topId}">${icon('play')}Play</button>` : ''}<button class="btn ghost" data-ext="${esc(a.url)}">${icon('external')}SoundCloud</button></div></div></div>`;
     if (a.top.length) html += section('Popular', `<div class="list" data-list="${topId}">${trackRows(a.top, { listId: topId })}</div>`);
     if (a.latest.items.length) html += section('Latest', listBlock(a.latest.items, a.latest.next, { extra: (t) => (t.created ? new Date(t.created).toLocaleDateString() : '') }));
+    const rpTracks = (a.reposts ? a.reposts.items : []).filter((x) => x.kind === 'track').slice(0, 10);
+    if (rpTracks.length) html += section('Reposts', listBlock(rpTracks, null, { extra: () => 'Repost' }));
     if (!a.top.length && !a.latest.items.length) html += empty('music', 'No tracks yet', `${a.name} hasn't uploaded any public tracks.`);
     return html;
   },
@@ -343,8 +359,8 @@ const PAGES = {
     const lid = regList([t]);
     const isNow = P.current() && P.current().id === t.id;
     let html = `<div class="page-head"><div class="cover"${bg(t.artwork, 't500x500')}></div><div style="min-width:0"><div class="kind">Track${t.genre ? ' · ' + esc(t.genre) : ''}</div><h1>${esc(t.title)}</h1>
-      <div class="meta"><button data-go="artist:${t.user.id}">${esc(t.artist)}</button> · ${plural(t.plays, 'play')} · ${plural(t.likes, 'like')} · ${fmt(t.duration)}</div>
-      <div class="actions"><button class="btn primary" data-play="${lid}:0">${icon('play')}${isNow ? 'Play from start' : 'Play'}</button><button class="btn ghost" data-like-btn="${t.id}">${icon('heart')}${liked.has(t.id) ? 'Liked' : 'Like'}</button><button class="btn ghost" data-addpl="${t.id}">${icon('plus')}Add to playlist</button><button class="btn ghost" data-ext="${esc(t.url)}">${icon('external')}SoundCloud</button></div></div></div>`;
+      <div class="meta"><button data-go="artist:${t.user.id}">${esc(t.artist)}</button> · ${plural(t.plays, 'play')} · ${plural(t.likes, 'like')}${t.reposts ? ' · ' + plural(t.reposts, 'repost') : ''} · ${fmt(t.duration)}</div>
+      <div class="actions"><button class="btn primary" data-play="${lid}:0">${icon('play')}${isNow ? 'Play from start' : 'Play'}</button><button class="btn ghost" data-like-btn="${t.id}">${icon('heart')}${liked.has(t.id) ? 'Liked' : 'Like'}</button><button class="btn ghost" data-repost-btn="${t.id}">${icon('repost')}${reposted.has(t.id) ? 'Reposted' : 'Repost'}</button><button class="btn ghost" data-addpl="${t.id}">${icon('plus')}Add to playlist</button><button class="btn ghost" data-dl="${t.id}">${icon('download')}Download</button><button class="btn ghost" data-ext="${esc(t.url)}">${icon('external')}SoundCloud</button></div></div></div>`;
     if (t.description) html += `<p class="desc">${esc(t.description)}</p>`;
     trackPageTrack = t;
     html += `<section class="section" id="comments"><div class="section-head"><h2>${plural(t.comments, 'comment')}</h2></div>`;
@@ -414,6 +430,9 @@ document.addEventListener('click', async (e) => {
   if (d.act === 'retry') return render();
   if (d.like) { e.stopPropagation(); return toggleLike(Number(d.like)); }
   if (d.likeBtn) { await toggleLike(Number(d.likeBtn)); el.innerHTML = icon('heart') + (liked.has(Number(d.likeBtn)) ? 'Liked' : 'Like'); return; }
+  if (d.repost) { e.stopPropagation(); return toggleRepost(Number(d.repost)); }
+  if (d.repostBtn) return toggleRepost(Number(d.repostBtn));
+  if (d.dl) return downloadTrack(findTrack(Number(d.dl)));
   if (d.addpl) { e.stopPropagation(); return openAddToPlaylist(Number(d.addpl)); }
   if (d.newpl) return openAddToPlaylist(null);
   if (d.seek) return seekComment(Number(d.seek));
@@ -537,7 +556,8 @@ view.addEventListener('submit', async (e) => {
     $('comment-list').insertAdjacentHTML('afterbegin', commentHtml(c));
     toast('Comment posted');
   } catch (err) {
-    toast(/Sign in/.test(err.message) ? 'Sign in to comment' : "Couldn't post your comment");
+    if (/Sign in/.test(err.message)) toast('Sign in to comment', { label: 'Sign in', fn: login });
+    else failToast("Couldn't post your comment", err);
   } finally {
     btn.disabled = false;
   }
@@ -719,7 +739,9 @@ async function refreshAuth() {
     const s = await sf.api('status');
     loggedIn = s.loggedIn;
     me = s.me || null;
-    liked = new Set(loggedIn ? await sf.api('likedIds') : []);
+    const [l, r] = loggedIn ? await Promise.all([sf.api('likedIds'), sf.api('repostedIds').catch(() => [])]) : [[], []];
+    liked = new Set(l);
+    reposted = new Set(r);
   } catch {
     loggedIn = false;
   }
@@ -799,11 +821,52 @@ async function toggleLike(id) {
   syncLikes(id);
   try {
     await sf.api('setLike', id, on);
-  } catch {
+  } catch (err) {
     on ? liked.delete(id) : liked.add(id);
     syncLikes(id);
-    toast("Couldn't update your like");
+    failToast("Couldn't update your like", err);
   }
+}
+
+// Why a SoundCloud request failed, in words (errors cross the app's process
+// boundary as text such as "SoundCloud returned 403 [BLOCKED]").
+function failReason(err) {
+  const m = String((err && err.message) || '');
+  if (/BLOCKED/.test(m)) return 'SoundCloud wants a quick check that you are a person. Try again and finish the check in the window that opens.';
+  const status = (m.match(/returned (\d{3})/) || [])[1];
+  if (status === '401') return 'Your sign-in has expired.';
+  if (status === '429') return 'SoundCloud says too many requests. Wait a minute and try again.';
+  if (status === '403') return 'SoundCloud refused it (403).';
+  if (status) return `SoundCloud returned ${status}.`;
+  if (!navigator.onLine) return 'You are offline.';
+  return '';
+}
+function failToast(what, err) {
+  console.error(what, err);
+  const why = failReason(err);
+  const expired = /returned 401/.test(String(err && err.message));
+  toast(why ? `${what}. ${why}` : what, expired ? { label: 'Sign in', fn: login } : undefined);
+}
+
+async function toggleRepost(id) {
+  if (!loggedIn) return toast('Sign in to repost tracks', { label: 'Sign in', fn: login });
+  const on = !reposted.has(id);
+  on ? reposted.add(id) : reposted.delete(id);
+  syncReposts(id);
+  try {
+    await sf.api('setRepost', id, on);
+    toast(on ? 'Reposted to your followers' : 'Repost removed');
+  } catch (err) {
+    on ? reposted.delete(id) : reposted.add(id);
+    syncReposts(id);
+    failToast(on ? "Couldn't repost" : "Couldn't remove the repost", err);
+  }
+}
+
+function syncReposts(id) {
+  document.querySelectorAll(`[data-repost="${id}"]`).forEach((b) => b.classList.toggle('on', reposted.has(id)));
+  document.querySelectorAll(`[data-repost-btn="${id}"]`).forEach((b) => { b.innerHTML = icon('repost') + (reposted.has(id) ? 'Reposted' : 'Repost'); });
+  updateNow();
 }
 
 function syncLikes(id) {
@@ -1000,6 +1063,34 @@ const P = {
     if (d && isFinite(d)) audio.currentTime = Math.max(0, Math.min(d - 0.5, fraction * d));
   },
 
+  // "Play next": goes straight after the current track (also with shuffle on).
+  playNext(t) {
+    if (!t) return;
+    if (!this.current()) return this.playList([t], 0, false);
+    if (this.order) {
+      this.queue.push(t);
+      this.order.splice(this.order.indexOf(this.index) + 1, 0, this.queue.length - 1);
+    } else this.queue.splice(this.index + 1, 0, t);
+    renderQueue();
+  },
+
+  // "Add to queue": goes to the very end of what is coming up.
+  addToQueue(t) {
+    if (!t) return;
+    if (!this.current()) return this.playList([t], 0, false);
+    this.queue.push(t);
+    if (this.order) this.order.push(this.queue.length - 1);
+    renderQueue();
+  },
+
+  removeAt(i) {
+    if (i === this.index || !this.queue[i]) return;
+    this.queue.splice(i, 1);
+    if (i < this.index) this.index--;
+    if (this.order) this.order = this.order.filter((x) => x !== i).map((x) => (x > i ? x - 1 : x));
+    renderQueue();
+  },
+
   setShuffle(on) {
     settings.shuffle = on;
     if (on) this.makeOrder(); else this.order = null;
@@ -1077,7 +1168,7 @@ audio.addEventListener('timeupdate', () => {
   if (!P.recorded && audio.currentTime > 5 && P.current()) { P.recorded = true; sf.api('recordPlay', P.current().id).catch(() => {}); }
   if (now - lastStateSent > 1000) sendState();
   if ('mediaSession' in navigator && isFinite(audio.duration)) {
-    try { navigator.mediaSession.setPositionState({ duration: audio.duration, position: Math.min(audio.currentTime, audio.duration), playbackRate: 1 }); } catch {}
+    try { navigator.mediaSession.setPositionState({ duration: audio.duration, position: Math.min(audio.currentTime, audio.duration), playbackRate: audio.playbackRate || 1 }); } catch {}
   }
   if (now - lastSave > 5000) saveSession();
 });
@@ -1144,6 +1235,11 @@ function updateNow() {
   else delete $('bb-artist').dataset.go;
   if (t) $('bb-t2').textContent = fmt(t.duration);
   for (const id of ['np-like', 'bb-like']) $(id).classList.toggle('on', !!(t && liked.has(t.id)));
+  for (const id of ['np-repost', 'bb-repost']) {
+    const on = !!(t && reposted.has(t.id));
+    $(id).classList.toggle('on', on);
+    $(id).title = on ? 'Remove repost' : 'Repost';
+  }
   for (const p of ['', 'bb-']) {
     $(p + 'shuffle').classList.toggle('on', !!settings.shuffle);
     $(p + 'repeat').classList.toggle('on', P.repeat !== 'none');
@@ -1278,6 +1374,7 @@ $('prev').onclick = () => P.prev();
 $('shuffle').onclick = () => P.setShuffle(!settings.shuffle);
 $('repeat').onclick = () => P.cycleRepeat();
 $('np-like').onclick = () => P.current() && toggleLike(P.current().id);
+for (const id of ['np-repost', 'bb-repost']) $(id).onclick = () => P.current() && toggleRepost(P.current().id);
 const openComments = async () => {
   if (!P.current()) return;
   router.go('track', P.current().id);
@@ -1327,6 +1424,7 @@ function sendState() {
     canLike: !!t,
     shuffle: !!settings.shuffle,
     repeat: P.repeat,
+    rate: audio.playbackRate || 1,
   });
 }
 
@@ -1340,6 +1438,8 @@ sf.onCommand((name, arg) => {
     case 'next': return P.next();
     case 'prev': return P.prev();
     case 'like': return t && toggleLike(t.id);
+    case 'repost': return t && toggleRepost(t.id);
+    case 'fx': return fxCommand(arg);
     case 'seek': return P.seek(Number(arg));
     case 'shuffle': return P.setShuffle(!settings.shuffle);
     case 'repeat': return P.cycleRepeat();
@@ -1384,6 +1484,11 @@ $('bb-prev').innerHTML = icon('prev');
 $('bb-next').innerHTML = icon('next');
 $('bb-repeat').innerHTML = icon('repeat');
 $('bb-like').innerHTML = icon('heart');
+for (const id of ['np-repost', 'bb-repost']) $(id).innerHTML = icon('repost');
+$('np-eq-ic').innerHTML = icon('eq');
+$('np-speed-ic').innerHTML = icon('speed');
+$('bb-eq').innerHTML = icon('eq');
+$('bb-speed').innerHTML = icon('speed');
 $('bb-mini').innerHTML = icon('mini');
 $('bb-open').innerHTML = icon('panel');
 for (const id of ['np-add', 'bb-add']) $(id).innerHTML = icon('plus');
@@ -1419,6 +1524,298 @@ function restoreSession() {
 window.addEventListener('beforeunload', saveSession);
 
 // ---------------------------------------------------------------------------
+// Equalizer and speed / pitch (Now playing panel and bottom bar)
+// ---------------------------------------------------------------------------
+const fmtHz = (f) => (f >= 1000 ? `${f / 1000}k` : String(f));
+const fmtDb = (v) => (v > 0 ? `+${v}` : String(v));
+const fmtSt = (v) => { const r = Math.round(v * 10) / 10; return `${r > 0 ? '+' : ''}${r} st`; };
+const pct = (v, lo, hi) => `${((v - lo) / (hi - lo)) * 100}%`;
+
+function updateFxButtons() {
+  const eqOn = FX.eqActive();
+  const spOn = FX.speedActive();
+  // The panel is narrow: the pills show the short version, the tooltip the rest.
+  const s = FX.state();
+  $('np-eq-val').textContent = FX.eqLabel();
+  $('np-speed-val').textContent = `${s.speed.toFixed(2)}×${(!s.link && s.pitch) || s.reverb ? ' +' : ''}`;
+  $('np-eq').title = `Equalizer: ${FX.eqLabel()} (Ctrl+Shift+E)`;
+  $('np-speed').title = `Speed and pitch: ${FX.speedLabel()} (Ctrl+Shift+S)`;
+  $('np-eq').classList.toggle('on', eqOn);
+  $('np-speed').classList.toggle('on', spOn);
+  $('bb-eq').classList.toggle('on', eqOn);
+  $('bb-speed').classList.toggle('on', spOn);
+  $('bb-eq').title = `Equalizer: ${FX.eqLabel()} (Ctrl+Shift+E)`;
+  $('bb-speed').title = `Speed and pitch: ${FX.speedLabel()} (Ctrl+Shift+S)`;
+}
+FX.onChange(() => { updateFxButtons(); syncPop(); sendState(); });
+
+let pop = null;
+let popAnchor = null;
+function closePop() {
+  if (!pop) return;
+  pop.remove();
+  pop = null;
+  if (popAnchor) popAnchor.setAttribute('aria-expanded', 'false');
+  popAnchor = null;
+}
+function openPop(anchor, kind) {
+  if (pop && popAnchor === anchor) return closePop();
+  closePop();
+  closeMenu();
+  pop = document.createElement('div');
+  pop.className = `pop pop-${kind}`;
+  pop.dataset.kind = kind;
+  pop.setAttribute('role', 'dialog');
+  pop.setAttribute('aria-label', kind === 'eq' ? 'Equalizer' : 'Speed and pitch');
+  pop.innerHTML = kind === 'eq' ? eqPopHtml() : speedPopHtml();
+  document.body.appendChild(pop);
+  popAnchor = anchor;
+  anchor.setAttribute('aria-expanded', 'true');
+  syncPop();
+  const r = anchor.getBoundingClientRect();
+  const w = pop.offsetWidth;
+  const h = pop.offsetHeight;
+  let top = r.top - h - 10;
+  if (top < 10) top = Math.min(window.innerHeight - h - 10, r.bottom + 10);
+  pop.style.left = `${Math.min(window.innerWidth - w - 10, Math.max(10, r.left + r.width / 2 - w / 2))}px`;
+  pop.style.top = `${Math.max(10, top)}px`;
+  const first = pop.querySelector('button, input');
+  if (first) first.focus();
+}
+
+function eqPopHtml() {
+  const s = FX.state();
+  return `<div class="pop-head"><h3>${icon('eq')}Equalizer</h3><button class="switch" role="switch" data-fx="eqOn" aria-label="Equalizer on or off"></button></div>
+    <div class="chips">${FX.EQ_PRESETS.map(([id, label]) => `<button data-eqp="${id}">${esc(label)}</button>`).join('')}<button data-eqp="custom" class="custom-chip">Custom</button></div>
+    <div class="eq-bands">${FX.BANDS.map((f, i) => `<label class="band"><output data-out="band${i}">${fmtDb(s.gains[i])}</output><input type="range" min="-12" max="12" step="0.5" value="${s.gains[i]}" data-band="${i}" aria-label="${fmtHz(f)} Hz"><span>${fmtHz(f)}</span></label>`).join('')}</div>
+    <div class="pop-foot"><span class="hint">Drag the sliders to make your own (saved as Custom).</span><button class="btn ghost sm" data-fx="eqReset">Reset</button></div>`;
+}
+
+function speedPopHtml() {
+  const s = FX.state();
+  return `<div class="pop-head"><h3>${icon('speed')}Speed and pitch</h3><button class="btn ghost sm" data-fx="speedReset">Reset</button></div>
+    <div class="chips">${FX.SPEED_PRESETS.map(([id, label]) => `<button data-spp="${id}">${esc(label)}</button>`).join('')}</div>
+    <div class="fx-slider"><div class="lbl">Speed</div><input type="range" min="0.5" max="2" step="0.01" value="${s.speed}" data-fxr="speed" aria-label="Speed"><output data-out="speed"></output></div>
+    <div class="fx-slider"><div class="lbl">Pitch</div><input type="range" min="-12" max="12" step="1" value="${FX.heardPitch()}" data-fxr="pitch" aria-label="Pitch in semitones"><output data-out="pitch"></output></div>
+    <div class="toggle-row"><div><div class="lbl">Pitch follows speed</div><div class="help">On: the classic sped up / slowed sound. Off: change speed and pitch separately.</div></div><button class="switch" role="switch" data-fx="link" aria-label="Pitch follows speed"></button></div>
+    <div class="fx-slider"><div class="lbl">Reverb</div><input type="range" min="0" max="100" step="1" value="${s.reverb}" data-fxr="reverb" aria-label="Reverb"><output data-out="reverb"></output></div>`;
+}
+
+// Brings an open popover up to date without rebuilding it (so a slider being
+// dragged keeps working).
+function syncPop() {
+  if (!pop) return;
+  const s = FX.state();
+  const setSwitch = (sel, on) => { const b = pop.querySelector(sel); if (b) { b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); } };
+  const setRange = (sel, v, lo, hi) => {
+    const el = pop.querySelector(sel);
+    if (!el) return;
+    if (document.activeElement !== el || !el.matches(':active')) el.value = v;
+    el.style.setProperty('--v', pct(v, lo, hi));
+  };
+  const out = (key, text) => { const o = pop.querySelector(`[data-out="${key}"]`); if (o) o.textContent = text; };
+  if (pop.dataset.kind === 'eq') {
+    setSwitch('[data-fx="eqOn"]', s.eqOn);
+    pop.querySelectorAll('[data-eqp]').forEach((b) => b.classList.toggle('on', s.eqOn && b.dataset.eqp === s.eqPreset));
+    const custom = pop.querySelector('.custom-chip');
+    if (custom) custom.hidden = !s.custom;
+    pop.querySelector('.eq-bands').classList.toggle('off', !s.eqOn);
+    s.gains.forEach((g, i) => { setRange(`[data-band="${i}"]`, g, -12, 12); out(`band${i}`, fmtDb(g)); });
+  } else {
+    const heard = FX.heardPitch();
+    const preset = FX.speedPresetId();
+    pop.querySelectorAll('[data-spp]').forEach((b) => b.classList.toggle('on', b.dataset.spp === preset));
+    setRange('[data-fxr="speed"]', s.speed, 0.5, 2);
+    out('speed', `${s.speed.toFixed(2)}×`);
+    setRange('[data-fxr="pitch"]', Math.round(heard), -12, 12);
+    out('pitch', fmtSt(heard));
+    pop.querySelector('[data-fxr="pitch"]').classList.toggle('linked', s.link);
+    setSwitch('[data-fx="link"]', s.link);
+    setRange('[data-fxr="reverb"]', s.reverb, 0, 100);
+    out('reverb', `${s.reverb}%`);
+  }
+}
+
+document.addEventListener('click', (e) => {
+  if (!pop) return;
+  if (!pop.contains(e.target)) {
+    if (!e.target.closest('#np-eq, #np-speed, #bb-eq, #bb-speed')) closePop();
+    return;
+  }
+  const b = e.target.closest('button');
+  if (!b) return;
+  const d = b.dataset;
+  if (d.fx === 'eqOn') FX.setEqOn(!FX.state().eqOn);
+  else if (d.fx === 'eqReset') FX.resetEq();
+  else if (d.fx === 'speedReset') FX.resetSpeed();
+  else if (d.fx === 'link') FX.setLink(!FX.state().link);
+  else if (d.eqp) FX.usePreset(d.eqp);
+  else if (d.spp) FX.useSpeedPreset(d.spp);
+});
+document.addEventListener('input', (e) => {
+  if (!pop || !pop.contains(e.target)) return;
+  const el = e.target;
+  if (el.dataset.band) return FX.setBand(Number(el.dataset.band), Number(el.value));
+  if (el.dataset.fxr === 'speed') return FX.setSpeed(Number(el.value));
+  if (el.dataset.fxr === 'pitch') return FX.setPitch(Number(el.value));
+  if (el.dataset.fxr === 'reverb') return FX.setReverb(Number(el.value));
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && pop) { const a = popAnchor; closePop(); if (a) a.focus(); } });
+window.addEventListener('resize', closePop);
+
+const fxAnchor = (kind) => (settings.panelOpen !== false ? $(kind === 'eq' ? 'np-eq' : 'np-speed') : $(kind === 'eq' ? 'bb-eq' : 'bb-speed'));
+$('np-eq').onclick = () => openPop($('np-eq'), 'eq');
+$('np-speed').onclick = () => openPop($('np-speed'), 'speed');
+$('bb-eq').onclick = () => openPop($('bb-eq'), 'eq');
+$('bb-speed').onclick = () => openPop($('bb-speed'), 'speed');
+
+function fxCommand(arg) {
+  if (arg === 'eq' || arg === 'speed') {
+    const a = fxAnchor(arg);
+    if (pop && popAnchor === a) return closePop();
+    return openPop(a, arg);
+  }
+  if (arg === 'faster') FX.nudgeSpeed(0.05);
+  else if (arg === 'slower') FX.nudgeSpeed(-0.05);
+  else if (arg === 'normal') {
+    FX.setSpeed(1);
+    if (!FX.state().link) FX.setPitch(0);
+  }
+  else return;
+  toast(`Speed ${FX.state().speed.toFixed(2)}×`);
+}
+
+// ---------------------------------------------------------------------------
+// Right-click menus
+// ---------------------------------------------------------------------------
+let menu = null;
+function closeMenu() {
+  if (menu) { menu.remove(); menu = null; }
+}
+
+// Which track (if any) a right-click landed on, and where it came from.
+function trackAt(el) {
+  const q = el.closest('[data-q]');
+  if (q) { const i = Number(q.dataset.q); return P.queue[i] ? { t: P.queue[i], qi: i } : null; }
+  const r = el.closest('[data-play]');
+  if (r) {
+    const [lid, i] = r.dataset.play.split(':');
+    const list = lists.get(lid);
+    const t = list && list[Number(i)];
+    if (t) return { t, lid, i: Number(i) };
+  }
+  if (el.closest('#np-art, #np-title, #np-artist, .player .wave, .player .controls, .player .subcontrols, .bb-left, .bb-center')) {
+    return P.current() ? { t: P.current(), now: true } : null;
+  }
+  const tid = el.closest('[data-tid]');
+  if (tid) { const t = findTrack(Number(tid.dataset.tid)); if (t) return { t }; }
+  if (el.closest('.page-head') && router.current() && router.current().name === 'track' && trackPageTrack) return { t: trackPageTrack };
+  return null;
+}
+
+function trackMenu({ t, lid, i, qi, now }) {
+  const locked = t.play === 'protected' || t.play === 'blocked';
+  const items = [];
+  if (!locked && !now) {
+    items.push(['play', qi !== undefined ? 'Play now' : 'Play', () => (qi !== undefined ? P.load(qi, true) : lid ? playFromList(lid, i, false) : P.playList([t], 0, false))]);
+    if (qi === undefined) {
+      items.push(['playnext', 'Play next', () => { P.playNext(t); toast(`“${t.title}” plays next`); }]);
+      items.push(['queue', 'Add to queue', () => { P.addToQueue(t); toast(`Added “${t.title}” to the queue`); }]);
+    }
+  }
+  if (qi !== undefined && qi !== P.index) items.push(['remove', 'Remove from queue', () => P.removeAt(qi)]);
+  items.push('-');
+  items.push(['heart', liked.has(t.id) ? 'Unlike' : 'Like', () => toggleLike(t.id), liked.has(t.id)]);
+  items.push(['repost', reposted.has(t.id) ? 'Remove repost' : 'Repost', () => toggleRepost(t.id), reposted.has(t.id)]);
+  items.push(['plus', 'Add to playlist…', () => openAddToPlaylist(t.id)]);
+  items.push('-');
+  if (!locked) items.push(['download', 'Download', () => downloadTrack(t)]);
+  items.push(['link', 'Copy link', () => { sf.copy(t.url); toast('Link copied'); }]);
+  items.push('-');
+  items.push(['comment', 'Comments and details', () => router.go('track', t.id)]);
+  if (t.user && t.user.id) items.push(['user', `Go to ${t.artist || 'artist'}`, () => router.go('artist', t.user.id)]);
+  items.push(['external', 'Open on SoundCloud', () => sf.openExternal(t.url)]);
+  return items;
+}
+
+function editMenu(input) {
+  const hasSel = input.selectionStart !== input.selectionEnd;
+  return [
+    ['cut', 'Cut', () => sf.edit('cut'), false, !hasSel],
+    ['copy', 'Copy', () => sf.edit('copy'), false, !hasSel],
+    ['paste', 'Paste', () => sf.edit('paste')],
+    '-',
+    ['select', 'Select all', () => { input.focus(); input.select(); }],
+  ];
+}
+
+function openMenu(x, y, items, title) {
+  closeMenu();
+  closePop();
+  closeAccountMenu();
+  menu = document.createElement('div');
+  menu.className = 'ctx';
+  menu.setAttribute('role', 'menu');
+  const clean = items.filter((it, k, a) => it !== '-' || (k > 0 && a[k - 1] !== '-' && k < a.length - 1));
+  menu.innerHTML =
+    (title ? `<div class="ctx-title">${esc(title)}</div>` : '') +
+    clean.map((it, k) => (it === '-' ? '<div class="ctx-sep"></div>' : `<button role="menuitem" data-k="${k}" class="${it[3] ? 'on' : ''}"${it[4] ? ' disabled' : ''}>${icon(it[0])}<span>${esc(it[1])}</span></button>`)).join('');
+  document.body.appendChild(menu);
+  const w = menu.offsetWidth;
+  const h = menu.offsetHeight;
+  menu.style.left = `${Math.max(6, Math.min(x, window.innerWidth - w - 6))}px`;
+  menu.style.top = `${Math.max(6, y + h > window.innerHeight - 6 ? y - h : y)}px`;
+  menu.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-k]');
+    if (!b || b.disabled) return;
+    const it = clean[Number(b.dataset.k)];
+    closeMenu();
+    it[2]();
+  });
+  menu.addEventListener('keydown', (e) => {
+    const btns = [...menu.querySelectorAll('button:not(:disabled)')];
+    const at = btns.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown') { e.preventDefault(); btns[(at + 1) % btns.length].focus(); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); btns[(at - 1 + btns.length) % btns.length].focus(); }
+  });
+  const first = menu.querySelector('button:not(:disabled)');
+  if (first) first.focus({ preventScroll: true });
+}
+
+document.addEventListener('contextmenu', (e) => {
+  const input = e.target.closest('input[type="text"], input[type="search"], textarea');
+  if (input) { e.preventDefault(); return openMenu(e.clientX, e.clientY, editMenu(input)); }
+  const hit = trackAt(e.target);
+  if (!hit) { closeMenu(); return; }
+  e.preventDefault();
+  openMenu(e.clientX, e.clientY, trackMenu(hit), hit.t.title);
+});
+document.addEventListener('mousedown', (e) => { if (menu && !menu.contains(e.target)) closeMenu(); }, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+view.addEventListener('scroll', closeMenu, { passive: true });
+window.addEventListener('blur', closeMenu);
+window.addEventListener('resize', closeMenu);
+
+// ---------------------------------------------------------------------------
+// Downloads
+// ---------------------------------------------------------------------------
+async function downloadTrack(t) {
+  if (!t) return;
+  if (t.play === 'protected' || t.play === 'blocked') return toast(`“${t.title}” is protected by SoundCloud and can't be downloaded.`);
+  toast(`Getting “${t.title}” ready…`);
+  try {
+    const r = await sf.download(t.id);
+    if (r.busy) return toast(`Already downloading “${t.title}”`);
+    if (r.canceled) return toast('Download canceled');
+    toast(`Downloaded “${t.title}”${r.original ? ' (the artist’s own file)' : ''}`, { label: 'Show in folder', fn: () => sf.showFile(r.file) });
+  } catch (err) {
+    if (/protected/i.test(String(err && err.message))) toast(`“${t.title}” is protected by SoundCloud and can't be downloaded.`);
+    else failToast(`Couldn't download “${t.title}”`, err);
+  }
+}
+sf.onDownload((d) => { if (!d.done) toast(`Downloading “${d.title}”… ${d.pct}%`); });
+
+// ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
 (async function start() {
@@ -1429,6 +1826,8 @@ window.addEventListener('beforeunload', saveSession);
   P.repeat = settings.repeat || 'none';
   applyTheme();
   applyPanel();
+  FX.init(audio);
+  updateFxButtons();
   restoreSession();
   renderSidebar();
   updateNow();

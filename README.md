@@ -5,6 +5,10 @@
 ## Features
 
 - **Its own interface.** Home with SoundCloud's recommendations, your feed, search, liked tracks, playlists and albums, recently played, following, artist pages and playlist pages.
+- **Equalizer.** The **EQ** button in Now playing (or the bottom bar) opens a 10-band equalizer with presets: Bass boost, Extra bass, Vocal, Hip-hop, R&B, Pop, Rock, Electronic, Late night and more. Drag the sliders to make your own; it is kept as Custom.
+- **Speed and pitch.** The **Speed** button: Slowed, Slowed + reverb, Sped up, Nightcore and Daycore in one click, or set speed (0.5× to 2×), pitch (±12 semitones) and reverb yourself. With "Pitch follows speed" on you get the classic sped up / slowed sound; turn it off to change speed and pitch separately.
+- **Right-click any song** for Play next, Add to queue, Like, Repost, Add to playlist, **Download**, Copy link, Comments, Go to artist and Open on SoundCloud. Downloads use the artist's own file when they allow downloads, otherwise the same audio Soundfast plays (protected tracks can't be downloaded).
+- **Reposts.** Repost from Now playing, the bottom bar, a track's page or the right-click menu. **Reposts** in the sidebar lists yours, and artist pages show theirs.
 - **Comments.** Click a track's title (or the comment button in Now playing) to open its page with the comments. Post your own comment; if the track is playing, it is timed to where you are in the song, just like on SoundCloud. Click a comment's time to jump there.
 - **Playlists.** The **+** button on any track (and in Now playing) adds it to one of your playlists, or creates a new playlist with it. **New playlist** on the Playlists page makes an empty one.
 - **Profiles.** Click your profile picture for your own artist page. On any artist page, click the followers or following count to see those people.
@@ -60,12 +64,18 @@ Output goes to `dist/`. The included workflow (`.github/workflows/release.yml`) 
 | `Ctrl+→` / `Ctrl+←` | Next / previous track |
 | `Ctrl+D` | Like / unlike |
 | `Ctrl+S` / `Ctrl+E` | Shuffle / repeat |
+| `Ctrl+Shift+P` | Repost / remove repost |
+| `Ctrl+Shift+E` | Equalizer |
+| `Ctrl+Shift+S` | Speed and pitch |
+| `Ctrl+]` / `Ctrl+[` | Speed up / slow down (0.05× steps) |
+| `Ctrl+Shift+N` | Normal speed |
 | `Ctrl+L` or `/` | Search |
 | `Ctrl+M` | Mini player |
 | `Ctrl+B` | Show / hide the Now playing panel |
 | `Ctrl+Shift+H` | Home |
 | `Ctrl+Shift+F` | Feed |
 | `Ctrl+Shift+L` | Liked tracks |
+| `Ctrl+Shift+O` | Reposts |
 | `Ctrl+Shift+Y` | Playlists |
 | `Ctrl+Shift+R` | Recently played |
 | `Ctrl+J` | Artist of the playing track |

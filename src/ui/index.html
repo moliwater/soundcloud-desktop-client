@@ -34,6 +34,7 @@
         <button class="bb-art" id="bb-art" title="Show Now playing" aria-label="Show Now playing"></button>
         <div class="bb-text"><button class="bb-title" id="bb-title" title="Open track page">Nothing playing</button><a class="bb-artist" id="bb-artist" href="#"></a></div>
         <button class="bb-like" id="bb-like" title="Like" aria-label="Like"></button>
+        <button class="bb-like bb-repost" id="bb-repost" title="Repost" aria-label="Repost"></button>
       </div>
       <div class="bb-center">
         <div class="bb-controls">
@@ -46,6 +47,8 @@
         <div class="bb-progress"><span id="bb-t1">0:00</span><div class="bb-bar" id="bb-bar" role="slider" aria-label="Seek" tabindex="0"><div class="bb-fill" id="bb-fill"></div><div class="bb-knob" id="bb-knob"></div></div><span id="bb-t2">0:00</span></div>
       </div>
       <div class="bb-right">
+        <button id="bb-eq" class="fx-btn" title="Equalizer (Ctrl+Shift+E)" aria-label="Equalizer"></button>
+        <button id="bb-speed" class="fx-btn" title="Speed and pitch (Ctrl+Shift+S)" aria-label="Speed and pitch"></button>
         <button id="bb-add" title="Add to playlist" aria-label="Add to playlist"></button>
         <button id="bb-comments" title="Comments" aria-label="Comments"></button>
         <button id="bb-vol-btn" title="Mute" aria-label="Mute"></button>
@@ -71,11 +74,16 @@
     </div>
     <div class="subcontrols">
       <button class="like" id="np-like" title="Like" aria-label="Like"></button>
+      <button class="repost" id="np-repost" title="Repost" aria-label="Repost"></button>
       <button id="np-add" title="Add to playlist" aria-label="Add to playlist"></button>
       <button id="np-comments" title="Comments" aria-label="Comments"></button>
       <button id="vol-btn" title="Mute" aria-label="Mute"></button>
       <input type="range" id="vol" min="0" max="1" step="0.01" value="1" aria-label="Volume">
       <button id="open-sc" title="Open on SoundCloud" aria-label="Open on SoundCloud"></button>
+    </div>
+    <div class="fxrow">
+      <button class="fx-pill" id="np-eq" title="Equalizer (Ctrl+Shift+E)" aria-haspopup="dialog"><span class="ic" id="np-eq-ic"></span><span class="lbl">EQ</span><span class="val" id="np-eq-val">Off</span></button>
+      <button class="fx-pill" id="np-speed" title="Speed and pitch (Ctrl+Shift+S)" aria-haspopup="dialog"><span class="ic" id="np-speed-ic"></span><span class="lbl">Speed</span><span class="val" id="np-speed-val">1.00×</span></button>
     </div>
     <div class="queue-head"><h3>Up next</h3><span id="q-count"></span></div>
     <div class="queue" id="queue"></div>
@@ -85,6 +93,7 @@
 <div class="toast" id="toast" role="status"></div>
 <audio id="audio" preload="auto"></audio>
 <script src="icons.js"></script>
+<script src="fx.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

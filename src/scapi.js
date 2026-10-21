@@ -5,12 +5,16 @@
 // requests carry your session token so likes, feed and library work.
 // Responses are trimmed to the few fields the interface needs before they are
 // handed over, which keeps the interface's memory small.
-const { session } = require('electron');
+const { app, session } = require('electron');
 const store = require('./store');
 
 const API = 'https://api-v2.soundcloud.com';
-const UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36';
+// The same browser identity as the sign-in window (main.js strips "Electron"
+// from it). SoundCloud's bot check ties its cookie to the browser it was given
+// to, so API requests have to match the window you signed in with.
+const FALLBACK_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
+const ua = () => (app && app.userAgentFallback) || FALLBACK_UA;
 
 let clientId = null; // read from settings on first use (after the app has set its data folder)
 let clientIdPromise = null;
@@ -33,8 +37,70 @@ function setActive(partition) {
 const activePartition = () => active;
 
 async function httpGet(url, headers = {}) {
-  return ses().fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json, text/plain, */*', ...headers } });
+  return ses().fetch(url, { headers: { 'User-Agent': ua(), Accept: 'application/json, text/plain, */*', ...headers } });
 }
+
+// ---- looking like soundcloud.com -------------------------------------------
+//
+// SoundCloud's API sits behind a bot check (DataDome). Reading works with just
+// the session token, but likes, comments, reposts and playlist edits are
+// refused unless the request looks like it came from soundcloud.com itself:
+// the site's Origin and Referer, and the "datadome" cookie that SoundCloud's
+// page set when you signed in. Every account session gets these added here,
+// for requests to SoundCloud's API only.
+const SITE = 'https://soundcloud.com';
+const ddCookie = new Map(); // partition -> datadome cookie value
+
+async function readDataDome(partition) {
+  try {
+    const list = await ses(partition).cookies.get({ name: 'datadome' });
+    const c = list.find((x) => /soundcloud\.com$/.test(x.domain.replace(/^\./, '')));
+    ddCookie.set(partition, c ? c.value : null);
+  } catch {
+    ddCookie.set(partition, null);
+  }
+  return ddCookie.get(partition);
+}
+
+function prepare(partition) {
+  const s = ses(partition);
+  readDataDome(partition);
+  s.cookies.on('changed', (_e, c) => {
+    if (c.name === 'datadome') readDataDome(partition);
+  });
+  s.webRequest.onBeforeSendHeaders({ urls: ['https://api-v2.soundcloud.com/*', 'https://api.soundcloud.com/*'] }, (details, cb) => {
+    const h = details.requestHeaders;
+    const has = (name) => Object.keys(h).some((k) => k.toLowerCase() === name);
+    // Requests made by SoundCloud's own pages (the sign-in window) already
+    // carry all of this; only fill in what is missing.
+    if (!has('origin')) h.Origin = SITE;
+    if (!has('referer')) h.Referer = SITE + '/';
+    const dd = ddCookie.get(partition);
+    if (dd) {
+      if (!has('x-datadome-clientid')) h['x-datadome-clientid'] = dd;
+      const ck = Object.keys(h).find((k) => k.toLowerCase() === 'cookie');
+      if (!ck) h.Cookie = `datadome=${dd}`;
+      else if (!/(^|;\s*)datadome=/.test(h[ck])) h[ck] += `; datadome=${dd}`;
+    }
+    cb({ requestHeaders: h });
+  });
+}
+
+// Set by the main process: shows SoundCloud's "are you human" check in a
+// window and resolves true once it is passed.
+let challengeHandler = null;
+const onChallenge = (fn) => {
+  challengeHandler = fn;
+};
+
+// Set by the main process: sends a request from inside a hidden soundcloud.com
+// page, so it goes out exactly as the website's own would (browser headers,
+// cookies and all). Used for likes, reposts, comments and playlist edits when
+// SoundCloud refuses the plain request.
+let pageFetcher = null;
+const onPageFetch = (fn) => {
+  pageFetcher = fn;
+};
 
 // ---- client id -----------------------------------------------------------
 
@@ -99,11 +165,26 @@ async function whoAmI(p) {
 
 // ---- requests ------------------------------------------------------------
 
-async function request(pathOrUrl, { method = 'GET', body, form, auth = true, retry = true, partition = active } = {}) {
+// One request, either straight from the app or from inside a soundcloud.com
+// page. Answers { status, text }.
+async function send(partition, url, init, viaPage) {
+  if (viaPage) {
+    // A web page can't set its own User-Agent; the page sends the real one.
+    const headers = { ...init.headers };
+    delete headers['User-Agent'];
+    return pageFetcher(partition, url, { ...init, headers });
+  }
+  const res = await ses(partition).fetch(url, { ...init, credentials: 'include' });
+  return { status: res.status, text: await res.text().catch(() => '') };
+}
+
+async function request(pathOrUrl, opts = {}) {
+  const { method = 'GET', body, form, auth = true, retry = true, verified = false, viaPage = false, partition = active } = opts;
+  const again = (patch) => request(pathOrUrl, { ...opts, method, auth, retry, verified, viaPage, partition, ...patch });
   const id = await getClientId();
   let url = pathOrUrl.startsWith('http') ? pathOrUrl : API + pathOrUrl;
   if (!/[?&]client_id=/.test(url)) url += (url.includes('?') ? '&' : '?') + `client_id=${id}`;
-  const headers = { 'User-Agent': UA, Accept: 'application/json, text/plain, */*' };
+  const headers = { 'User-Agent': ua(), Accept: 'application/json, text/plain, */*' };
   const token = auth ? await getToken(partition) : null;
   if (token) headers.Authorization = `OAuth ${token}`;
   let payload;
@@ -114,19 +195,72 @@ async function request(pathOrUrl, { method = 'GET', body, form, auth = true, ret
     headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
     payload = new URLSearchParams(form).toString();
   }
-  const res = await ses(partition).fetch(url, { method, headers, body: payload });
-  if ((res.status === 401 || res.status === 403) && retry && !token) {
-    // The public client id rotates now and then; fetch a fresh one once.
-    await getClientId(true);
-    return request(pathOrUrl, { method, body, form, auth, retry: false, partition });
-  }
-  if (!res.ok) {
+  const res = await send(partition, url, { method, headers, body: payload }, viaPage);
+  const isWrite = method !== 'GET';
+  if (res.status === 403 || res.status === 405 || res.status === 429) {
+    // Likes, reposts and comments are checked harder than reading. If the
+    // plain request is refused, send it again the way soundcloud.com does.
+    if (isWrite && !viaPage && pageFetcher && res.status !== 405) {
+      try {
+        return await again({ viaPage: true });
+      } catch (e) {
+        if (e.status) throw e; // SoundCloud's answer from the page
+        console.warn('[scapi] page request failed:', e.message); // carry on with the plain answer
+      }
+    }
+    // The bot check answers with a link to its "are you human" page.
+    const m = res.text.match(/https:\\?\/\\?\/[a-z0-9.-]*captcha-delivery\.com[^"\s]*/i);
+    if (m) {
+      const captcha = m[0].replace(/\\\//g, '/');
+      if (!verified && challengeHandler && (await challengeHandler(partition, captcha))) {
+        return again({ verified: true });
+      }
+      const err = new Error(`SoundCloud returned ${res.status} [BLOCKED]`);
+      err.status = res.status;
+      err.code = 'BLOCKED';
+      throw err;
+    }
+    if (res.status === 403 && retry && !token) {
+      await getClientId(true);
+      return again({ retry: false });
+    }
     const err = new Error(`SoundCloud returned ${res.status}`);
     err.status = res.status;
     throw err;
   }
-  const text = await res.text();
-  return text ? JSON.parse(text) : null;
+  if (res.status === 401 && retry && !token) {
+    // The public client id rotates now and then; fetch a fresh one once.
+    await getClientId(true);
+    return again({ retry: false });
+  }
+  if (res.status < 200 || res.status > 299) {
+    const err = new Error(`SoundCloud returned ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  const text = res.text;
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null; // some write calls answer with an empty or non-JSON body
+  }
+}
+
+// Tries a few request shapes in turn and keeps the first one SoundCloud
+// accepts. Only "wrong format" answers move on to the next shape; sign-in and
+// bot-check problems stop straight away.
+async function firstAccepted(attempts) {
+  let last;
+  for (const [path, opts] of attempts) {
+    try {
+      return await request(path, opts);
+    } catch (e) {
+      last = e;
+      if (![400, 404, 405, 415, 422].includes(e.status) || e.code === 'BLOCKED') throw e;
+    }
+  }
+  throw last;
 }
 
 // ---- shaping -------------------------------------------------------------
@@ -165,6 +299,7 @@ function track(t) {
     waveform: t.waveform_url || '',
     plays: t.playback_count || 0,
     likes: t.likes_count || 0,
+    reposts: t.reposts_count || 0,
     genre: t.genre || '',
     created: t.created_at || '',
     play: playability(t),
@@ -370,12 +505,13 @@ const methods = {
   },
 
   async artist(id) {
-    const [u, top, all] = await Promise.all([
+    const [u, top, all, rp] = await Promise.all([
       request(`/users/${id}`),
       request(`/users/${id}/toptracks?limit=10`).catch(() => ({ collection: [] })),
       request(`/users/${id}/tracks?limit=30`).catch(() => ({ collection: [] })),
+      request(`/stream/users/${id}/reposts?limit=20`).catch(() => ({ collection: [] })),
     ]);
-    return { ...user(u), top: page(top, track).items, latest: page(all, track) };
+    return { ...user(u), top: page(top, track).items, latest: page(all, track), reposts: page(rp, (x) => item(x.track || x.playlist)) };
   },
 
   // Every remaining track after a "Show more" link, fetched 200 at a time,
@@ -458,26 +594,112 @@ const methods = {
   async setLike(trackId, liked) {
     const me = (await methods.status()).me;
     if (!me) throw new Error('Sign in to like tracks');
-    await request(`/users/${me.id}/track_likes/${trackId}`, { method: liked ? 'PUT' : 'DELETE' });
+    const method = liked ? 'PUT' : 'DELETE';
+    // The first form is what soundcloud.com sends; the second is an older one.
+    await firstAccepted([
+      [`/users/${me.id}/track_likes/${trackId}`, { method }],
+      [`/me/track_likes/${trackId}`, { method }],
+    ]);
     return liked;
   },
 
-  // Request formats below match what soundcloud.com itself sends.
+  // Reposts: share a track to your followers' feeds.
+  async repostedIds() {
+    try {
+      const res = await request('/me/track_reposts/ids?limit=5000');
+      return (res.collection || res || []).map(Number);
+    } catch {
+      // Older accounts / API versions: read them from your reposts list.
+      try {
+        const me = (await methods.status()).me;
+        if (!me) return [];
+        const res = await request(`/stream/users/${me.id}/reposts?limit=200`);
+        return (res.collection || []).filter((x) => x.track).map((x) => x.track.id);
+      } catch {
+        return [];
+      }
+    }
+  },
+
+  async setRepost(trackId, on) {
+    if (!(await getToken())) throw new Error('Sign in to repost');
+    const method = on ? 'PUT' : 'DELETE';
+    await firstAccepted([
+      [`/me/track_reposts/${trackId}`, { method }],
+      [`/reposts/tracks/${trackId}`, { method }],
+    ]);
+    return on;
+  },
+
+  // Your reposts (or anyone's, with a user id): tracks and playlists.
+  async reposts(next, userId) {
+    let id = userId;
+    if (!id) {
+      const me = (await methods.status()).me;
+      if (!me) return { items: [], next: null };
+      id = me.id;
+    }
+    const res = await request(next || `/stream/users/${id}/reposts?limit=40`);
+    return page(res, (x) => item(x.track || x.playlist));
+  },
+
+  // Comments are JSON on SoundCloud's current API ({ comment: { body,
+  // timestamp } }, timestamp in milliseconds). The older form-encoded shape
+  // is kept as a last resort.
   async postComment(trackId, text, atSeconds) {
     if (!(await getToken())) throw new Error('Sign in to comment');
     const bodyText = String(text || '').trim();
     if (!bodyText) throw new Error('Write something first');
+    const ms = typeof atSeconds === 'number' && isFinite(atSeconds) && atSeconds >= 0 ? Math.floor(atSeconds * 1000) : null;
+    const comment = { body: bodyText };
+    if (ms !== null) comment.timestamp = ms;
     const form = { body: bodyText };
-    if (typeof atSeconds === 'number' && isFinite(atSeconds) && atSeconds >= 0) form.timestamp = String(Math.floor(atSeconds * 1000));
-    const c = await request(`/tracks/${trackId}/comments`, { method: 'POST', form });
+    if (ms !== null) form.timestamp = String(ms);
+    const c = await firstAccepted([
+      [`/tracks/soundcloud:tracks:${trackId}/comments`, { method: 'POST', body: { comment } }],
+      [`/tracks/${trackId}/comments`, { method: 'POST', body: { comment } }],
+      [`/tracks/${trackId}/comments`, { method: 'POST', form }],
+    ]);
     const me = (await methods.status()).me;
     return {
       id: c && c.id,
       body: (c && c.body) || bodyText,
-      at: c && typeof c.timestamp === 'number' ? Math.floor(c.timestamp / 1000) : form.timestamp ? Math.floor(Number(form.timestamp) / 1000) : null,
+      at: c && typeof c.timestamp === 'number' ? Math.floor(c.timestamp / 1000) : ms !== null ? Math.floor(ms / 1000) : null,
       created: (c && c.created_at) || new Date().toISOString(),
       user: me ? { id: me.id, name: me.name, avatar: me.avatar } : { id: 0, name: 'You', avatar: '' },
     };
+  },
+
+  // Where to download a track from: the artist's own file when they allow
+  // downloads, otherwise the same audio Soundfast plays.
+  async downloadInfo(id) {
+    const t = await request(`/tracks/${id}`);
+    const x = track(t);
+    if (!x) throw new Error('Track not found');
+    const base = { id: x.id, title: x.title, artist: x.artist, artwork: x.artwork };
+    if (t.downloadable && t.has_downloads_left !== false) {
+      try {
+        const d = await request(`/tracks/${id}/download`);
+        if (d && d.redirectUri) return { ...base, kind: 'original', url: d.redirectUri };
+      } catch {
+        /* fall back to the stream */
+      }
+    }
+    const list = (t.media && t.media.transcodings) || [];
+    const ok = (x) => x.format && /^(hls|progressive)$/.test(x.format.protocol);
+    const pick =
+      list.find((x) => ok(x) && x.format.protocol === 'progressive') ||
+      list.find((x) => ok(x) && /mp4a|aac/.test(x.format.mime_type) && x.quality === 'hq') ||
+      list.find((x) => ok(x) && /mp4a|aac/.test(x.format.mime_type)) ||
+      list.find((x) => ok(x) && /mpeg/.test(x.format.mime_type)) ||
+      list.find(ok);
+    if (!pick) {
+      const e = new Error('protected');
+      e.code = 'PROTECTED';
+      throw e;
+    }
+    const res = await request(`${pick.url}${pick.url.includes('?') ? '&' : '?'}track_authorization=${encodeURIComponent(t.track_authorization || '')}`);
+    return { ...base, kind: pick.format.protocol, mime: pick.format.mime_type || '', url: res.url };
   },
 
   async addToPlaylist(playlistId, trackId) {
@@ -514,4 +736,4 @@ async function call(name, args = []) {
   return fn(...args);
 }
 
-module.exports = { call, getToken, logout, getClientId, whoAmI, setActive, activePartition, DEFAULT_PARTITION };
+module.exports = { call, getToken, logout, getClientId, whoAmI, setActive, activePartition, prepare, onChallenge, onPageFetch, DEFAULT_PARTITION };

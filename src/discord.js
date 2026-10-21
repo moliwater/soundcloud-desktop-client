@@ -190,7 +190,9 @@ class DiscordPresence {
     const t = this.track;
     if (!t || !t.hasTrack || !t.playing || !t.title) return null;
     const now = Date.now();
-    const startMs = Math.round(now - (t.position || 0) * 1000);
+    // With the speed changer on, a second of track goes by faster or slower.
+    const rate = t.rate > 0 ? t.rate : 1;
+    const startMs = Math.round(now - ((t.position || 0) * 1000) / rate);
     const activity = {
       type: ACTIVITY_LISTENING,
       details: clamp(t.title),
@@ -199,7 +201,7 @@ class DiscordPresence {
       assets: {},
       instance: false,
     };
-    if (t.duration > 0) activity.timestamps.end = startMs + Math.round(t.duration * 1000);
+    if (t.duration > 0) activity.timestamps.end = startMs + Math.round((t.duration * 1000) / rate);
     const art = httpsUrl(t.artwork, 256);
     if (art) {
       activity.assets.large_image = art;
@@ -216,7 +218,7 @@ class DiscordPresence {
     if (link && /^https:\/\/([a-z0-9-]+\.)?soundcloud\.com\//i.test(link)) {
       activity.buttons = [{ label: 'Listen on SoundCloud', url: link }];
     }
-    return { key: `${t.title}|${t.artist}|${t.duration}|${t.artwork}`, startMs, activity };
+    return { key: `${t.title}|${t.artist}|${t.duration}|${t.artwork}|${rate}`, startMs, activity };
   }
 
   needsUpdate(want) {

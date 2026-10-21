@@ -157,6 +157,12 @@ function isAuth(url) {
   return AUTH_HOSTS.includes(h);
 }
 
+// SoundCloud's "are you human" check (DataDome) is served from here.
+function isChallenge(url) {
+  const h = hostOf(url);
+  return h === 'captcha-delivery.com' || h.endsWith('.captcha-delivery.com');
+}
+
 function openExternal(url) {
   if (/^(https?|mailto):/i.test(url)) shell.openExternal(url);
 }
@@ -164,7 +170,7 @@ function openExternal(url) {
 function hardenContents(contents) {
   contents.setWindowOpenHandler(({ url }) => {
     const fromUi = contents === mainWindow?.webContents || contents === miniWindow?.webContents;
-    if (!fromUi && (isSoundCloud(url) || isAuth(url))) {
+    if (!fromUi && (isSoundCloud(url) || isAuth(url) || isChallenge(url))) {
       // Login pop-ups need to stay in the app so the session is shared.
       return {
         action: 'allow',
@@ -187,7 +193,7 @@ function hardenContents(contents) {
   contents.on('will-navigate', (e, url) => {
     if (url.startsWith('file:')) return;
     const isUi = contents === mainWindow?.webContents || contents === miniWindow?.webContents;
-    if (isUi || (!isSoundCloud(url) && !isAuth(url))) {
+    if (isUi || (!isSoundCloud(url) && !isAuth(url) && !isChallenge(url))) {
       e.preventDefault();
       openExternal(url);
     }
@@ -290,6 +296,8 @@ function createMainWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    // A hidden helper page must not keep the app running.
+    closeApiPage();
   });
 
   mainWindow.on('show', updateThumbar);
@@ -709,6 +717,7 @@ function buildAppMenu() {
         { label: 'Feed', accelerator: 'CmdOrCtrl+Shift+F', click: () => nav('feed') },
         { label: 'Search', accelerator: 'CmdOrCtrl+L', click: () => { showMain(); command('focusSearch'); } },
         { label: 'Liked tracks', accelerator: 'CmdOrCtrl+Shift+L', click: () => nav('likes') },
+        { label: 'Reposts', accelerator: 'CmdOrCtrl+Shift+O', click: () => nav('reposts') },
         { label: 'Playlists', accelerator: 'CmdOrCtrl+Shift+Y', click: () => nav('library') },
         { label: 'Recently played', accelerator: 'CmdOrCtrl+Shift+R', click: () => nav('history') },
         { label: 'Artist of the playing track', accelerator: 'CmdOrCtrl+J', click: () => { showMain(); command('openTrack'); } },
@@ -729,6 +738,13 @@ function buildAppMenu() {
         { label: 'Like / Unlike', accelerator: 'CmdOrCtrl+D', click: () => command('like') },
         { label: 'Shuffle', accelerator: 'CmdOrCtrl+S', click: () => command('shuffle') },
         { label: 'Repeat', accelerator: 'CmdOrCtrl+E', click: () => command('repeat') },
+        { label: 'Repost / Remove repost', accelerator: 'CmdOrCtrl+Shift+P', click: () => command('repost') },
+        { type: 'separator' },
+        { label: 'Equalizer', accelerator: 'CmdOrCtrl+Shift+E', click: () => { showMain(); command('fx', 'eq'); } },
+        { label: 'Speed and pitch', accelerator: 'CmdOrCtrl+Shift+S', click: () => { showMain(); command('fx', 'speed'); } },
+        { label: 'Speed up', accelerator: 'CmdOrCtrl+]', click: () => command('fx', 'faster') },
+        { label: 'Slow down', accelerator: 'CmdOrCtrl+[', click: () => command('fx', 'slower') },
+        { label: 'Normal speed', accelerator: 'CmdOrCtrl+Shift+N', click: () => command('fx', 'normal') },
       ],
     },
     {
@@ -873,6 +889,7 @@ function prepareSession(partition) {
   preparedSessions.add(partition);
   const ses = session.fromPartition(partition);
   adblock.apply(ses, true);
+  scapi.prepare(partition);
   ses.setPermissionRequestHandler((_wc, permission, cb) => {
     cb(['mediaKeySystem', 'notifications', 'clipboard-sanitized-write', 'fullscreen'].includes(permission));
   });
@@ -962,6 +979,320 @@ async function removeAccount(partition) {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// SoundCloud's bot check. When SoundCloud wants proof that a like, comment or
+// repost comes from a person, its check page opens in a small window. Passing
+// it gives the account a fresh "datadome" cookie and the request is retried.
+// ---------------------------------------------------------------------------
+
+let challengeWin = null;
+let challengePromise = null;
+let challengeSkippedAt = 0;
+
+function solveChallenge(partition, url) {
+  if (challengeWin && !challengeWin.isDestroyed()) {
+    challengeWin.focus();
+    return challengePromise;
+  }
+  if (!isChallenge(url)) return Promise.resolve(false);
+  // Closed without finishing a moment ago: don't keep popping it up.
+  if (Date.now() - challengeSkippedAt < 60 * 1000) return Promise.resolve(false);
+  const ses = session.fromPartition(partition);
+  challengeWin = new BrowserWindow({
+    width: 480,
+    height: 660,
+    parent: mainWindow || undefined,
+    title: 'Quick check from SoundCloud',
+    icon: icon(IS_WIN ? 'icon.ico' : 'icon.png'),
+    autoHideMenuBar: true,
+    backgroundColor: '#ffffff',
+    webPreferences: { partition, contextIsolation: true, sandbox: true },
+  });
+  const win = challengeWin;
+  const wc = win.webContents;
+  challengePromise = new Promise((resolve) => {
+    let finished = false;
+    let renewed = false;
+    const finish = (ok) => {
+      if (finished) return;
+      finished = true;
+      ses.cookies.removeListener('changed', onCookie);
+      try {
+        if (!wc.isDestroyed() && wc.debugger.isAttached()) wc.debugger.detach();
+      } catch {
+        /* already detached */
+      }
+      if (!win.isDestroyed()) win.close();
+      resolve(ok);
+    };
+    const onCookie = (_e, c, _cause, removed) => {
+      if (removed || c.name !== 'datadome' || !/soundcloud\.com$/.test(c.domain.replace(/^\./, ''))) return;
+      renewed = true;
+      setTimeout(() => finish(true), 400);
+    };
+    ses.cookies.on('changed', onCookie);
+    // The check page hands the new cookie to soundcloud.com through its
+    // answer; outside SoundCloud's page nothing picks it up, so read it here.
+    try {
+      wc.debugger.attach('1.3');
+      wc.debugger.sendCommand('Network.enable').catch(() => {});
+      const watch = new Set();
+      wc.debugger.on('message', async (_e, method, params) => {
+        if (method === 'Network.responseReceived' && isChallenge(params.response.url)) watch.add(params.requestId);
+        if (method !== 'Network.loadingFinished' || !watch.has(params.requestId)) return;
+        watch.delete(params.requestId);
+        try {
+          const r = await wc.debugger.sendCommand('Network.getResponseBody', { requestId: params.requestId });
+          const text = r.base64Encoded ? Buffer.from(r.body, 'base64').toString('utf8') : r.body;
+          const m = text.match(/datadome=([^;"\\\s]+)/);
+          if (m) {
+            await ses.cookies.set({
+              url: 'https://soundcloud.com',
+              name: 'datadome',
+              value: m[1],
+              domain: '.soundcloud.com',
+              path: '/',
+              secure: true,
+              sameSite: 'lax',
+              expirationDate: Math.floor(Date.now() / 1000) + 365 * 24 * 3600,
+            });
+          }
+        } catch {
+          /* not a body we can read */
+        }
+      });
+    } catch {
+      /* debugger unavailable: rely on the page setting the cookie */
+    }
+    win.on('closed', () => {
+      challengeWin = null;
+      if (!renewed) challengeSkippedAt = Date.now();
+      finish(renewed);
+    });
+  });
+  win.loadURL(url);
+  return challengePromise;
+}
+
+scapi.onChallenge(solveChallenge);
+
+// ---------------------------------------------------------------------------
+// Sending likes, reposts and comments the way soundcloud.com does. A hidden
+// page on soundcloud.com (its tiny robots.txt, so nothing heavy loads) makes
+// the request itself, with the browser's own headers and cookies. It is only
+// opened when SoundCloud refuses a plain request, and closes after a minute.
+// ---------------------------------------------------------------------------
+
+let apiPage = null; // { win, partition, ready }
+let apiPageTimer = null;
+
+function closeApiPage() {
+  clearTimeout(apiPageTimer);
+  if (apiPage && !apiPage.win.isDestroyed()) apiPage.win.destroy();
+  apiPage = null;
+}
+
+function openApiPage(partition) {
+  if (apiPage && apiPage.partition === partition && !apiPage.win.isDestroyed()) return apiPage.ready;
+  closeApiPage();
+  const win = new BrowserWindow({
+    show: false,
+    width: 400,
+    height: 300,
+    skipTaskbar: true,
+    webPreferences: { partition, contextIsolation: true, sandbox: true, backgroundThrottling: false },
+  });
+  win.webContents.setAudioMuted(true);
+  const page = { win, partition };
+  page.ready = win
+    .loadURL('https://soundcloud.com/robots.txt')
+    .then(() => win)
+    .catch((err) => {
+      if (apiPage === page) closeApiPage();
+      throw err;
+    });
+  win.on('closed', () => {
+    if (apiPage === page) apiPage = null;
+  });
+  apiPage = page;
+  return page.ready;
+}
+
+async function pageFetch(partition, url, init) {
+  const win = await openApiPage(partition);
+  clearTimeout(apiPageTimer);
+  apiPageTimer = setTimeout(closeApiPage, 60 * 1000);
+  const req = { method: init.method || 'GET', headers: init.headers || {}, body: init.body == null ? undefined : String(init.body) };
+  const js = `(async () => {
+    const r = await fetch(${JSON.stringify(url)}, { ...${JSON.stringify(req)}, credentials: 'include', mode: 'cors' });
+    return { status: r.status, text: await r.text() };
+  })()`;
+  return win.webContents.executeJavaScript(js, true);
+}
+
+scapi.onPageFetch(pageFetch);
+
+// ---------------------------------------------------------------------------
+// Downloads
+// ---------------------------------------------------------------------------
+
+const safeName = (s) => String(s || '').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 150) || 'track';
+
+function sendDownload(info) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('download:progress', info);
+}
+
+// Reads an HLS playlist: its segment links, the init segment (fMP4) and
+// whether it is encrypted. A master playlist is followed to its first variant.
+async function readPlaylist(fetcher, url, depth = 0) {
+  const res = await fetcher(url);
+  if (!res.ok) throw new Error(`Playlist returned ${res.status}`);
+  const text = await res.text();
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (depth < 2 && lines.some((l) => l.startsWith('#EXT-X-STREAM-INF'))) {
+    const i = lines.findIndex((l) => l.startsWith('#EXT-X-STREAM-INF'));
+    const variant = lines.slice(i + 1).find((l) => !l.startsWith('#'));
+    if (variant) return readPlaylist(fetcher, new URL(variant, url).toString(), depth + 1);
+  }
+  const key = lines.find((l) => l.startsWith('#EXT-X-KEY'));
+  if (key && !/METHOD=NONE/i.test(key)) throw Object.assign(new Error('protected'), { code: 'PROTECTED' });
+  const map = lines.find((l) => l.startsWith('#EXT-X-MAP'));
+  const mapUri = map && (map.match(/URI="([^"]+)"/) || [])[1];
+  return {
+    init: mapUri ? new URL(mapUri, url).toString() : null,
+    segments: lines.filter((l) => !l.startsWith('#')).map((l) => new URL(l, url).toString()),
+  };
+}
+
+function extFor(info, playlist, contentType, disposition) {
+  const named = (disposition && (disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i) || [])[1]) || '';
+  const fromName = (named.match(/\.([a-z0-9]{2,5})$/i) || [])[1];
+  if (fromName) return fromName.toLowerCase();
+  if (playlist) {
+    if (playlist.init) return 'm4a';
+    const seg = playlist.segments[0] || '';
+    if (/\.mp3(\?|$)/i.test(seg) || /mpeg/.test(info.mime || '')) return 'mp3';
+    if (/\.aac(\?|$)/i.test(seg)) return 'aac';
+    if (/\.ts(\?|$)/i.test(seg)) return 'ts';
+    return /mp4a|aac/.test(info.mime || '') ? 'm4a' : 'mp3';
+  }
+  const ct = String(contentType || '');
+  if (/wav/.test(ct)) return 'wav';
+  if (/flac/.test(ct)) return 'flac';
+  if (/aiff/.test(ct)) return 'aiff';
+  if (/ogg/.test(ct)) return 'ogg';
+  if (/mp4|m4a|aac/.test(ct)) return 'm4a';
+  return 'mp3';
+}
+
+async function downloadTrack(trackId) {
+  const info = await scapi.call('downloadInfo', [trackId]);
+  const ses = session.fromPartition(scapi.activePartition());
+  const fetcher = (u) => ses.fetch(u, { headers: { 'User-Agent': app.userAgentFallback } });
+  let playlist = null;
+  let first = null;
+  if (info.kind === 'hls') playlist = await readPlaylist(fetcher, info.url);
+  else {
+    first = await fetcher(info.url);
+    if (!first.ok) throw new Error(`Download returned ${first.status}`);
+  }
+  const ext = extFor(info, playlist, first && first.headers.get('content-type'), first && first.headers.get('content-disposition'));
+  const name = `${safeName(info.artist ? `${info.artist} - ${info.title}` : info.title)}.${ext}`;
+  const pick = await dialog.showSaveDialog(mainWindow, {
+    title: 'Download track',
+    defaultPath: path.join(app.getPath('downloads'), name),
+    filters: [{ name: ext.toUpperCase(), extensions: [ext] }, { name: 'All files', extensions: ['*'] }],
+  });
+  if (pick.canceled || !pick.filePath) {
+    if (first && first.body) first.body.cancel().catch(() => {});
+    return { canceled: true };
+  }
+  const file = pick.filePath;
+  const part = file + '.part';
+  const out = fs.createWriteStream(part);
+  const write = (buf) => new Promise((res, rej) => out.write(buf, (err) => (err ? rej(err) : res())));
+  let lastPct = -1;
+  const progress = (pct) => {
+    const p = Math.max(0, Math.min(100, Math.floor(pct)));
+    if (p !== lastPct) {
+      lastPct = p;
+      sendDownload({ id: trackId, title: info.title, pct: p });
+    }
+  };
+  try {
+    progress(0);
+    if (playlist) {
+      if (playlist.init) {
+        const r = await fetcher(playlist.init);
+        if (!r.ok) throw new Error(`Segment returned ${r.status}`);
+        await write(Buffer.from(await r.arrayBuffer()));
+      }
+      const segs = playlist.segments;
+      // A few segments at a time, written in order.
+      const AHEAD = 4;
+      const jobs = [];
+      const get = (i) => fetcher(segs[i]).then(async (r) => {
+        if (!r.ok) throw new Error(`Segment returned ${r.status}`);
+        return Buffer.from(await r.arrayBuffer());
+      });
+      for (let i = 0; i < Math.min(AHEAD, segs.length); i++) jobs[i] = get(i);
+      for (let i = 0; i < segs.length; i++) {
+        if (i + AHEAD < segs.length) jobs[i + AHEAD] = get(i + AHEAD);
+        await write(await jobs[i]);
+        jobs[i] = null;
+        progress(((i + 1) / segs.length) * 100);
+      }
+    } else {
+      const total = Number(first.headers.get('content-length')) || 0;
+      let got = 0;
+      const reader = first.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        got += value.length;
+        await write(Buffer.from(value));
+        if (total) progress((got / total) * 100);
+      }
+    }
+    await new Promise((res, rej) => out.end((err) => (err ? rej(err) : res())));
+    fs.rmSync(file, { force: true });
+    fs.renameSync(part, file);
+    sendDownload({ id: trackId, title: info.title, pct: 100, done: true, file });
+    return { file, original: info.kind === 'original' };
+  } catch (err) {
+    out.destroy();
+    fs.rmSync(part, { force: true });
+    throw err;
+  }
+}
+
+const downloading = new Set();
+ipcMain.handle('download', async (e, trackId) => {
+  if (e.sender !== mainWindow?.webContents) throw new Error('Not allowed');
+  const id = Number(trackId);
+  if (!id) throw new Error('No track');
+  if (downloading.has(id)) return { busy: true };
+  downloading.add(id);
+  try {
+    return await downloadTrack(id);
+  } finally {
+    downloading.delete(id);
+  }
+});
+ipcMain.on('show-file', (e, file) => {
+  if (e.sender === mainWindow?.webContents && typeof file === 'string' && fs.existsSync(file)) shell.showItemInFolder(file);
+});
+
+// Cut / copy / paste for the right-click menu in text boxes.
+ipcMain.on('edit', (e, what) => {
+  if (e.sender !== mainWindow?.webContents) return;
+  const wc = mainWindow.webContents;
+  if (what === 'cut') wc.cut();
+  else if (what === 'copy') wc.copy();
+  else if (what === 'paste') wc.paste();
+  else if (what === 'selectAll') wc.selectAll();
+});
 
 const fromUi = (e) => e.sender === mainWindow?.webContents;
 ipcMain.handle('auth:login', async (e) => {
@@ -1068,6 +1399,22 @@ app.whenReady().then(async () => {
     return net.fetch(pathToFileURL(bgFile(name)).toString());
   });
   applyTheme();
+
+  // The equalizer and effects run the music through Web Audio, which only
+  // processes audio that its server allows other pages to read (CORS).
+  // SoundCloud's audio servers don't always say so for a local app, so say it
+  // here. Only audio, stream-playlist and segment requests from Soundfast's
+  // own window are touched (this session is used by nothing else; Chromium's
+  // built-in HLS player fetches segments as "other").
+  session.defaultSession.webRequest.onHeadersReceived({ urls: ['https://*/*'] }, (details, cb) => {
+    if (!['media', 'xhr', 'other'].includes(details.resourceType)) return cb({});
+    const headers = {};
+    for (const [k, v] of Object.entries(details.responseHeaders || {})) {
+      if (!/^access-control-allow-(origin|credentials)$/i.test(k)) headers[k] = v;
+    }
+    headers['Access-Control-Allow-Origin'] = ['*'];
+    cb({ responseHeaders: headers });
+  });
 
   // SoundCloud sessions are only used for data requests and the sign-in
   // window. Ads and trackers on the sign-in page are blocked (adds no memory).
