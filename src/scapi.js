@@ -1,0 +1,382 @@
+// SoundCloud data layer for Soundfast's own interface.
+//
+// Uses the same web API (api-v2) that soundcloud.com itself uses: the public
+// "client id" is read from SoundCloud's own scripts, and once you sign in,
+// requests carry your session token so likes, feed and library work.
+// Responses are trimmed to the few fields the interface needs before they are
+// handed over, which keeps the interface's memory small.
+const { session } = require('electron');
+const store = require('./store');
+
+const API = 'https://api-v2.soundcloud.com';
+const UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36';
+
+let clientId = store.get('scClientId') || null;
+let clientIdPromise = null;
+let meCache = null;
+const mediaCache = new Map(); // track id -> { transcodings, auth }
+const MEDIA_CACHE_MAX = 600;
+
+const ses = () => session.fromPartition('persist:soundcloud');
+
+async function httpGet(url, headers = {}) {
+  return ses().fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json, text/plain, */*', ...headers } });
+}
+
+// ---- client id -----------------------------------------------------------
+
+async function discoverClientId() {
+  const html = await (await httpGet('https://soundcloud.com/')).text();
+  const scripts = [...html.matchAll(/<script[^>]+src="(https:\/\/a-v2\.sndcdn\.com\/assets\/[^"]+\.js)"/g)].map((m) => m[1]);
+  for (const src of scripts.reverse()) {
+    const js = await (await httpGet(src)).text();
+    const m = js.match(/client_id\s*[:=]\s*"([a-zA-Z0-9]{32})"/);
+    if (m) return m[1];
+  }
+  throw new Error('Could not connect to SoundCloud (client id not found)');
+}
+
+async function getClientId(refresh = false) {
+  if (clientId && !refresh) return clientId;
+  if (!clientIdPromise) {
+    clientIdPromise = discoverClientId()
+      .then((id) => {
+        clientId = id;
+        store.set('scClientId', id);
+        return id;
+      })
+      .finally(() => {
+        clientIdPromise = null;
+      });
+  }
+  return clientIdPromise;
+}
+
+// ---- auth ----------------------------------------------------------------
+
+async function getToken() {
+  const cookies = await ses().cookies.get({ name: 'oauth_token' });
+  const c = cookies.find((x) => /soundcloud\.com$/.test(x.domain.replace(/^\./, '')));
+  return c ? c.value : null;
+}
+
+async function logout() {
+  meCache = null;
+  const cookies = await ses().cookies.get({});
+  await Promise.all(
+    cookies
+      .filter((c) => /soundcloud\.com$/.test(c.domain.replace(/^\./, '')))
+      .map((c) => ses().cookies.remove(`https://${c.domain.replace(/^\./, '')}${c.path}`, c.name).catch(() => {}))
+  );
+  await ses().clearStorageData({ origins: ['https://soundcloud.com', 'https://secure.soundcloud.com'] }).catch(() => {});
+}
+
+// ---- requests ------------------------------------------------------------
+
+async function request(pathOrUrl, { method = 'GET', body, auth = true, retry = true } = {}) {
+  const id = await getClientId();
+  let url = pathOrUrl.startsWith('http') ? pathOrUrl : API + pathOrUrl;
+  if (!/[?&]client_id=/.test(url)) url += (url.includes('?') ? '&' : '?') + `client_id=${id}`;
+  const headers = { 'User-Agent': UA, Accept: 'application/json, text/plain, */*' };
+  const token = auth ? await getToken() : null;
+  if (token) headers.Authorization = `OAuth ${token}`;
+  if (body) headers['Content-Type'] = 'application/json';
+  const res = await ses().fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  if ((res.status === 401 || res.status === 403) && retry && !token) {
+    // The public client id rotates now and then; fetch a fresh one once.
+    await getClientId(true);
+    return request(pathOrUrl, { method, body, auth, retry: false });
+  }
+  if (!res.ok) {
+    const err = new Error(`SoundCloud returned ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+// ---- shaping -------------------------------------------------------------
+
+const art = (url) => (url ? url.replace(/-(large|t\d+x\d+|crop|small|badge|tiny|mini|original)\./, '-{size}.') : '');
+
+function remember(t) {
+  if (!t.media) return;
+  if (mediaCache.size > MEDIA_CACHE_MAX) mediaCache.delete(mediaCache.keys().next().value);
+  mediaCache.set(t.id, { transcodings: t.media.transcodings || [], auth: t.track_authorization });
+}
+
+function playability(t) {
+  const list = (t.media && t.media.transcodings) || [];
+  const plain = list.some((x) => x.format && /^(hls|progressive)$/.test(x.format.protocol));
+  if (t.policy === 'BLOCK') return 'blocked';
+  if (!list.length) return t.kind === 'track' ? 'unknown' : 'none';
+  return plain ? 'ok' : 'protected';
+}
+
+function track(t) {
+  if (!t || t.kind !== 'track') return null;
+  if (!t.title) return { kind: 'track', id: t.id, stub: true };
+  remember(t);
+  const u = t.user || {};
+  const pm = t.publisher_metadata || {};
+  return {
+    kind: 'track',
+    id: t.id,
+    title: t.title,
+    artist: pm.artist && pm.artist.length < 60 ? pm.artist : u.username || '',
+    user: { id: u.id, name: u.username || '', url: u.permalink_url || '' },
+    url: t.permalink_url,
+    artwork: art(t.artwork_url || u.avatar_url),
+    duration: Math.round((t.full_duration || t.duration || 0) / 1000),
+    waveform: t.waveform_url || '',
+    plays: t.playback_count || 0,
+    likes: t.likes_count || 0,
+    genre: t.genre || '',
+    created: t.created_at || '',
+    play: playability(t),
+    preview: t.policy === 'SNIP',
+  };
+}
+
+function user(u) {
+  if (!u || u.kind !== 'user') return null;
+  return {
+    kind: 'user',
+    id: u.id,
+    name: u.username,
+    fullName: u.full_name || '',
+    avatar: art(u.avatar_url),
+    banner: u.visuals && u.visuals.visuals && u.visuals.visuals[0] ? u.visuals.visuals[0].visual_url : '',
+    city: [u.city, u.country_code].filter(Boolean).join(', '),
+    followers: u.followers_count || 0,
+    tracks: u.track_count || 0,
+    url: u.permalink_url,
+    description: (u.description || '').slice(0, 600),
+  };
+}
+
+function playlist(p) {
+  if (!p) return null;
+  if (p.kind === 'system-playlist') {
+    return {
+      kind: 'system',
+      id: p.urn,
+      title: p.title || p.short_title || 'Playlist',
+      description: p.short_description || p.description || '',
+      artwork: art(p.artwork_url || p.calculated_artwork_url || (p.tracks && p.tracks[0] && p.tracks[0].artwork_url)),
+      user: { name: (p.user && p.user.username) || 'SoundCloud' },
+      count: (p.tracks && p.tracks.length) || 0,
+      url: p.permalink_url,
+    };
+  }
+  if (p.kind !== 'playlist') return null;
+  const first = (p.tracks || []).find((t) => t && t.artwork_url);
+  return {
+    kind: 'playlist',
+    id: p.id,
+    title: p.title,
+    isAlbum: !!p.is_album,
+    artwork: art(p.artwork_url || (first && first.artwork_url) || (p.user && p.user.avatar_url)),
+    user: { id: p.user && p.user.id, name: (p.user && p.user.username) || '' },
+    count: p.track_count || (p.tracks && p.tracks.length) || 0,
+    url: p.permalink_url,
+  };
+}
+
+function item(x) {
+  if (!x) return null;
+  if (x.kind === 'track') return track(x);
+  if (x.kind === 'user') return user(x);
+  if (x.kind === 'playlist' || x.kind === 'system-playlist') return playlist(x);
+  return null;
+}
+
+// Fill in tracks that came back as id-only stubs (long playlists do this).
+async function fillStubs(list) {
+  const missing = list.filter((t) => t && t.stub).map((t) => t.id);
+  if (!missing.length) return list;
+  const byId = new Map();
+  for (let i = 0; i < missing.length; i += 50) {
+    const chunk = await request(`/tracks?ids=${missing.slice(i, i + 50).join(',')}`);
+    for (const t of chunk || []) byId.set(t.id, track(t));
+  }
+  return list.map((t) => (t && t.stub ? byId.get(t.id) || null : t)).filter(Boolean);
+}
+
+const page = (res, map) => ({ items: (res.collection || []).map(map).filter(Boolean), next: res.next_href || null });
+
+// ---- public methods (called from the interface) --------------------------
+
+const methods = {
+  async status() {
+    const token = await getToken();
+    if (!token) {
+      meCache = null;
+      return { loggedIn: false };
+    }
+    if (!meCache) {
+      try {
+        meCache = user(await request('/me'));
+      } catch (e) {
+        if (e.status === 401) return { loggedIn: false };
+        throw e;
+      }
+    }
+    return { loggedIn: true, me: meCache };
+  },
+
+  async home() {
+    const res = await request('/mixed-selections?limit=10');
+    return (res.collection || [])
+      .map((s) => ({
+        title: s.title || '',
+        description: s.description || '',
+        items: ((s.items && s.items.collection) || []).map(item).filter(Boolean).slice(0, 12),
+      }))
+      .filter((s) => s.items.length);
+  },
+
+  async feed(next) {
+    const res = await request(next || '/stream?limit=30');
+    const items = [];
+    for (const e of res.collection || []) {
+      const x = item(e.track || e.playlist);
+      if (x) items.push({ ...x, repostedBy: e.type && e.type.includes('repost') && e.user ? e.user.username : '' });
+    }
+    return { items, next: res.next_href || null };
+  },
+
+  async search(q, kind = 'all', next) {
+    const path = { all: '/search', tracks: '/search/tracks', people: '/search/users', playlists: '/search/playlists_without_albums', albums: '/search/albums' }[kind] || '/search';
+    const res = await request(next || `${path}?q=${encodeURIComponent(q)}&limit=30`);
+    return page(res, item);
+  },
+
+  async likes(next) {
+    const me = (await methods.status()).me;
+    if (!me) return { items: [], next: null };
+    const res = await request(next || `/users/${me.id}/track_likes?limit=40`);
+    return page(res, (x) => track(x.track));
+  },
+
+  async likedIds() {
+    try {
+      const res = await request('/me/track_likes/ids?limit=5000');
+      return (res.collection || res || []).map(Number);
+    } catch {
+      return [];
+    }
+  },
+
+  async library(next) {
+    const res = await request(next || '/me/library/all?limit=40');
+    return page(res, (x) => playlist(x.playlist || x.system_playlist) || item(x));
+  },
+
+  async history(next) {
+    const res = await request(next || '/me/play-history/tracks?limit=40');
+    return page(res, (x) => track(x.track));
+  },
+
+  async following(next) {
+    const me = (await methods.status()).me;
+    if (!me) return { items: [], next: null };
+    const res = await request(next || `/users/${me.id}/followings?limit=40`);
+    return page(res, user);
+  },
+
+  async playlist(id) {
+    const isSystem = String(id).startsWith('soundcloud:system-playlists');
+    const p = await request(isSystem ? `/system-playlists/${encodeURIComponent(id)}` : `/playlists/${id}?representation=full`);
+    const info = playlist(p);
+    const tracks = await fillStubs((p.tracks || []).map((t) => (t.title ? track(t) : { kind: 'track', id: t.id, stub: true })));
+    return { ...info, count: tracks.length, tracks };
+  },
+
+  async artist(id) {
+    const [u, top, all] = await Promise.all([
+      request(`/users/${id}`),
+      request(`/users/${id}/toptracks?limit=10`).catch(() => ({ collection: [] })),
+      request(`/users/${id}/tracks?limit=30`).catch(() => ({ collection: [] })),
+    ]);
+    return { ...user(u), top: page(top, track).items, latest: page(all, track) };
+  },
+
+  async more(next) {
+    // Generic "load more" for any next_href.
+    const res = await request(next);
+    return page(res, (x) => item(x.track || x.playlist || x));
+  },
+
+  async related(id) {
+    const res = await request(`/tracks/${id}/related?limit=20`);
+    return page(res, track).items;
+  },
+
+  async resolve(url) {
+    return item(await request(`/resolve?url=${encodeURIComponent(url)}`));
+  },
+
+  async waveform(url) {
+    if (!url) return null;
+    try {
+      const res = await httpGet(url);
+      const j = await res.json();
+      const s = j.samples || [];
+      const out = [];
+      const n = 72;
+      for (let i = 0; i < n; i++) {
+        const slice = s.slice(Math.floor((i * s.length) / n), Math.floor(((i + 1) * s.length) / n));
+        out.push(slice.length ? Math.max(...slice) / (j.height || 140) : 0);
+      }
+      return out;
+    } catch {
+      return null;
+    }
+  },
+
+  async stream(id) {
+    let m = mediaCache.get(id);
+    if (!m) {
+      const t = await request(`/tracks/${id}`);
+      track(t);
+      m = mediaCache.get(id);
+    }
+    if (!m) throw new Error('Track not found');
+    const pick =
+      m.transcodings.find((x) => x.format.protocol === 'hls' && /mp4a|aac/.test(x.format.mime_type) && x.quality === 'hq') ||
+      m.transcodings.find((x) => x.format.protocol === 'hls' && /mp4a|aac/.test(x.format.mime_type) && x.preset === 'aac_160k') ||
+      m.transcodings.find((x) => x.format.protocol === 'hls' && /mp4a|aac/.test(x.format.mime_type)) ||
+      m.transcodings.find((x) => x.format.protocol === 'progressive') ||
+      m.transcodings.find((x) => x.format.protocol === 'hls');
+    if (!pick) {
+      const e = new Error('protected');
+      e.code = 'PROTECTED';
+      throw e;
+    }
+    const res = await request(`${pick.url}${pick.url.includes('?') ? '&' : '?'}track_authorization=${encodeURIComponent(m.auth || '')}`);
+    return { url: res.url, protocol: pick.format.protocol };
+  },
+
+  async setLike(trackId, liked) {
+    const me = (await methods.status()).me;
+    if (!me) throw new Error('Sign in to like tracks');
+    await request(`/users/${me.id}/track_likes/${trackId}`, { method: liked ? 'PUT' : 'DELETE' });
+    return liked;
+  },
+
+  async recordPlay(trackId) {
+    if (!(await getToken())) return;
+    await request('/me/play-history', { method: 'POST', body: { track_urn: `soundcloud:tracks:${trackId}` } }).catch(() => {});
+  },
+};
+
+async function call(name, args = []) {
+  const fn = methods[name];
+  if (!fn) throw new Error(`Unknown method ${name}`);
+  return fn(...args);
+}
+
+module.exports = { call, getToken, logout, getClientId };

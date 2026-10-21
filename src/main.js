@@ -1,8 +1,9 @@
-// Soundfast: a lightweight desktop app for SoundCloud.
+// Soundfast: a lightweight desktop app for SoundCloud with its own interface.
 const {
   app,
   BrowserWindow,
   Menu,
+  clipboard,
   Notification,
   Tray,
   ipcMain,
@@ -18,9 +19,11 @@ const path = require('path');
 const store = require('./store');
 const { DiscordPresence } = require('./discord');
 const adblock = require('./adblock');
+const scapi = require('./scapi');
 
 const APP_ID = 'com.soundfast.app';
-const HOME_URL = 'https://soundcloud.com/';
+const SIGNIN_URL = 'https://soundcloud.com/signin';
+const UI_FILE = path.join(__dirname, 'ui', 'index.html');
 // Set "homepage" in package.json to your GitHub repo to enable the Help links.
 const PKG = require('../package.json');
 const PROJECT_URL = (PKG.homepage || '').replace(/\/$/, '');
@@ -42,8 +45,18 @@ let state = { hasTrack: false, playing: false, title: '', artist: '', position: 
 let lastNotifiedKey = '';
 let lastBlur = 0;
 let presence = null;
-let trimTimer = null;
-let adCssKey = null;
+let loginWin = null;
+let loginPromise = null;
+
+// Title bar colors per theme (the window controls sit over the Now playing
+// panel, so they use that panel's color).
+const THEMES = {
+  charcoal: { bg: '#1c1c1f', panel: '#232327', text: '#f4f4f5', dark: true },
+  midnight: { bg: '#0e1221', panel: '#151a2d', text: '#eef1fb', dark: true },
+  black: { bg: '#000000', panel: '#0c0c0d', text: '#f5f5f5', dark: true },
+  light: { bg: '#f3f3f5', panel: '#ffffff', text: '#17171a', dark: false },
+};
+const theme = () => THEMES[store.get('theme')] || THEMES.charcoal;
 
 // ---------------------------------------------------------------------------
 // Startup
@@ -55,7 +68,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', (_e, argv) => {
     const link = findSoundCloudLink(argv);
     showMain();
-    if (link && mainWindow) mainWindow.loadURL(link);
+    if (link) command('openUrl', link);
   });
 }
 
@@ -143,19 +156,15 @@ function openExternal(url) {
 
 function hardenContents(contents) {
   contents.setWindowOpenHandler(({ url }) => {
-    if (isSoundCloud(url) && !isAuth(url) && contents === mainWindow?.webContents && !/secure\.soundcloud\.com/.test(url)) {
-      // Plain SoundCloud links (e.g. "open in new tab") load in the main window.
-      mainWindow.loadURL(url);
-      return { action: 'deny' };
-    }
-    if (isSoundCloud(url) || isAuth(url)) {
+    const fromUi = contents === mainWindow?.webContents || contents === miniWindow?.webContents;
+    if (!fromUi && (isSoundCloud(url) || isAuth(url))) {
       // Login pop-ups need to stay in the app so the session is shared.
       return {
         action: 'allow',
         overrideBrowserWindowOptions: {
           width: 520,
           height: 720,
-          parent: mainWindow || undefined,
+          parent: loginWin || mainWindow || undefined,
           autoHideMenuBar: true,
           backgroundColor: '#ffffff',
           icon: icon('icon.png'),
@@ -169,7 +178,8 @@ function hardenContents(contents) {
 
   contents.on('will-navigate', (e, url) => {
     if (url.startsWith('file:')) return;
-    if (!isSoundCloud(url) && !isAuth(url)) {
+    const isUi = contents === mainWindow?.webContents || contents === miniWindow?.webContents;
+    if (isUi || (!isSoundCloud(url) && !isAuth(url))) {
       e.preventDefault();
       openExternal(url);
     }
@@ -201,12 +211,15 @@ function createMainWindow() {
     minHeight: 560,
     title: 'Soundfast',
     icon: icon(IS_WIN ? 'icon.ico' : 'icon.png'),
-    backgroundColor: '#111111',
+    backgroundColor: theme().bg,
     autoHideMenuBar: true,
     show: false,
+    // Our own dark title bar; the system window buttons sit on top of it.
+    ...(IS_MAC
+      ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 18, y: 18 } }
+      : { titleBarStyle: 'hidden', titleBarOverlay: overlay() }),
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      partition: 'persist:soundcloud',
+      preload: path.join(__dirname, 'ui', 'preload.js'),
       contextIsolation: true,
       sandbox: true,
       spellcheck: false,
@@ -220,23 +233,12 @@ function createMainWindow() {
     if (!START_HIDDEN) mainWindow.show();
   });
 
-  const startUrl = findSoundCloudLink(process.argv) || HOME_URL;
-  mainWindow.loadURL(startUrl);
-
+  mainWindow.loadFile(UI_FILE);
+  const startLink = findSoundCloudLink(process.argv);
   const wc = mainWindow.webContents;
-  wc.setZoomFactor(store.get('zoom') || 1);
-
-  wc.on('did-finish-load', () => wc.setZoomFactor(store.get('zoom') || 1));
-  wc.on('dom-ready', () => {
-    adCssKey = null;
-    applyAdCss();
-  });
-
-  // Show a friendly page instead of a blank window when offline.
-  wc.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
-    if (!isMainFrame || code === -3 /* aborted */) return;
-    const retry = isSoundCloud(url) ? url : HOME_URL;
-    mainWindow.loadFile(path.join(__dirname, 'offline.html'), { query: { retry, reason: desc } });
+  wc.on('did-finish-load', () => {
+    wc.setZoomFactor(store.get('zoom') || 1);
+    if (startLink) setTimeout(() => command('openUrl', startLink), 1500);
   });
 
   // Keep our own window title: "Track — Artist".
@@ -247,8 +249,8 @@ function createMainWindow() {
 
   // Mouse back/forward buttons on Windows.
   mainWindow.on('app-command', (_e, cmd) => {
-    if (cmd === 'browser-backward') goBack();
-    if (cmd === 'browser-forward') goForward();
+    if (cmd === 'browser-backward') command('nav', 'back');
+    if (cmd === 'browser-forward') command('nav', 'forward');
   });
 
   const saveBounds = debounce(() => {
@@ -282,23 +284,7 @@ function createMainWindow() {
     mainWindow = null;
   });
 
-  mainWindow.on('show', () => {
-    updateThumbar();
-    clearInterval(trimTimer);
-    trimTimer = null;
-  });
-  // Free image and script caches while the window is hidden or minimized.
-  const startTrimming = () => {
-    clearInterval(trimTimer);
-    setTimeout(() => command('trim'), 5000);
-    trimTimer = setInterval(() => command('trim'), 5 * 60 * 1000);
-  };
-  mainWindow.on('hide', startTrimming);
-  mainWindow.on('minimize', startTrimming);
-  mainWindow.on('restore', () => {
-    clearInterval(trimTimer);
-    trimTimer = null;
-  });
+  mainWindow.on('show', updateThumbar);
   mainWindow.on('blur', () => (lastBlur = Date.now()));
 }
 
@@ -320,37 +306,23 @@ function toggleMain() {
   }
 }
 
-function goBack() {
-  const wc = mainWindow?.webContents;
-  if (!wc) return;
-  const h = wc.navigationHistory;
-  if (h ? h.canGoBack() : wc.canGoBack()) h ? h.goBack() : wc.goBack();
+function overlay() {
+  const t = theme();
+  return { color: t.panel, symbolColor: t.text, height: 44 };
 }
 
-function goForward() {
-  const wc = mainWindow?.webContents;
-  if (!wc) return;
-  const h = wc.navigationHistory;
-  if (h ? h.canGoForward() : wc.canGoForward()) h ? h.goForward() : wc.goForward();
-}
-
-async function applyAdCss() {
-  const wc = mainWindow?.webContents;
-  if (!wc || wc.isDestroyed()) return;
-  try {
-    if (store.get('adBlock') && !adCssKey) adCssKey = await wc.insertCSS(adblock.HIDE_CSS);
-    else if (!store.get('adBlock') && adCssKey) {
-      await wc.removeInsertedCSS(adCssKey);
-      adCssKey = null;
+function applyTheme() {
+  const t = theme();
+  nativeTheme.themeSource = t.dark ? 'dark' : 'light';
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.setBackgroundColor(t.bg);
+  if (!IS_MAC && mainWindow.setTitleBarOverlay) {
+    try {
+      mainWindow.setTitleBarOverlay(overlay());
+    } catch {
+      /* not supported on this system */
     }
-  } catch {
-    /* page navigating */
   }
-}
-
-function setAdBlock(on) {
-  adblock.apply(session.fromPartition('persist:soundcloud'), on);
-  applyAdCss();
 }
 
 function setZoom(z) {
@@ -386,17 +358,6 @@ ipcMain.on('sc:state', (e, next) => {
 
   if (miniWindow && !miniWindow.isDestroyed()) miniWindow.webContents.send('mini:state', state);
   presence?.update(state);
-});
-
-// Real mouse click inside the page (used for seeking on the timeline).
-ipcMain.on('sc:click-at', (e, { x, y }) => {
-  if (!mainWindow || e.sender !== mainWindow.webContents) return;
-  const z = mainWindow.webContents.getZoomFactor();
-  const pt = { x: Math.round(x * z), y: Math.round(y * z) };
-  const wc = mainWindow.webContents;
-  wc.sendInputEvent({ type: 'mouseMove', ...pt });
-  wc.sendInputEvent({ type: 'mouseDown', button: 'left', clickCount: 1, ...pt });
-  wc.sendInputEvent({ type: 'mouseUp', button: 'left', clickCount: 1, ...pt });
 });
 
 function nowPlayingText() {
@@ -548,37 +509,36 @@ function settingsMenu() {
     label,
     type: 'checkbox',
     checked: !!store.get(key),
-    click: (item) => {
-      store.set(key, item.checked);
-      if (after) after(item.checked);
-      buildMenus();
-    },
+    click: (item) => applySetting(key, item.checked, after),
+  });
+  const radio = (label, key, options) => ({
+    label,
+    submenu: options.map(([value, text]) => ({
+      label: text,
+      type: 'radio',
+      checked: store.get(key) === value,
+      click: () => applySetting(key, value),
+    })),
   });
   const items = [
+    radio('Theme', 'theme', [['charcoal', 'Charcoal'], ['midnight', 'Midnight'], ['black', 'True black'], ['light', 'Light']]),
+    radio('Accent color', 'accent', [['green', 'Green'], ['orange', 'Orange'], ['blue', 'Blue'], ['purple', 'Purple'], ['pink', 'Pink'], ['red', 'Red']]),
+    { type: 'separator' },
     toggle(IS_MAC ? 'Keep playing when window is closed' : 'Close to tray (keep playing)', 'closeToTray'),
-    toggle('Block ads', 'adBlock', setAdBlock),
     toggle('Show a notification when the track changes', 'notifications'),
+    toggle('Keep playing similar tracks when the queue ends', 'autoplay'),
     toggle('Mini player always on top', 'miniAlwaysOnTop', (on) => miniWindow?.setAlwaysOnTop(on)),
   ];
   if (presence?.configured) {
-    items.unshift(
-      toggle("Show what I'm listening to on Discord", 'discordPresence', (on) => {
-        if (on) {
-          presence.start();
-          presence.update(state);
-        } else {
-          presence.stop();
-        }
-      })
+    items.splice(3, 0, 
+      toggle("Show what I'm listening to on Discord", 'discordPresence')
     );
   }
   if (IS_WIN) items.push(toggle('Show track progress on the taskbar', 'taskbarProgress', updateProgress));
-  items.push(toggle('Low memory mode (restarts Soundfast)', 'lowMemory', restartApp));
+  items.push(toggle('Low memory mode (restarts Soundfast)', 'lowMemory'));
   if (IS_WIN || IS_MAC) {
     items.push(
-      toggle(IS_WIN ? 'Start with Windows' : 'Open at login', 'openAtLogin', (on) =>
-        app.setLoginItemSettings({ openAtLogin: on, args: ['--hidden'] })
-      )
+      toggle(IS_WIN ? 'Start with Windows' : 'Open at login', 'openAtLogin')
     );
   }
   if (IS_WIN) {
@@ -637,17 +597,19 @@ function buildAppMenu() {
     {
       label: 'Navigate',
       submenu: [
-        { label: 'Home', accelerator: 'CmdOrCtrl+Shift+H', click: () => mainWindow?.loadURL(HOME_URL) },
-        { label: 'Search', accelerator: 'CmdOrCtrl+L', click: () => command('focusSearch') },
-        { label: 'Your Likes', accelerator: 'CmdOrCtrl+Shift+L', click: () => mainWindow?.loadURL('https://soundcloud.com/you/likes') },
-        { label: 'Your Library', accelerator: 'CmdOrCtrl+Shift+Y', click: () => mainWindow?.loadURL('https://soundcloud.com/you/library') },
-        { label: 'Go to playing track', accelerator: 'CmdOrCtrl+J', click: () => command('openTrack') },
+        { label: 'Home', accelerator: 'CmdOrCtrl+Shift+H', click: () => nav('home') },
+        { label: 'Feed', accelerator: 'CmdOrCtrl+Shift+F', click: () => nav('feed') },
+        { label: 'Search', accelerator: 'CmdOrCtrl+L', click: () => { showMain(); command('focusSearch'); } },
+        { label: 'Liked tracks', accelerator: 'CmdOrCtrl+Shift+L', click: () => nav('likes') },
+        { label: 'Playlists', accelerator: 'CmdOrCtrl+Shift+Y', click: () => nav('library') },
+        { label: 'Recently played', accelerator: 'CmdOrCtrl+Shift+R', click: () => nav('history') },
+        { label: 'Artist of the playing track', accelerator: 'CmdOrCtrl+J', click: () => { showMain(); command('openTrack'); } },
+        { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => nav('settings') },
         { type: 'separator' },
-        { label: 'Back', accelerator: 'Alt+Left', click: goBack },
-        { label: 'Forward', accelerator: 'Alt+Right', click: goForward },
+        { label: 'Back', accelerator: 'Alt+Left', click: () => command('nav', 'back') },
+        { label: 'Forward', accelerator: 'Alt+Right', click: () => command('nav', 'forward') },
         { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => mainWindow?.webContents.reload() },
-        { label: 'Reload (F5)', accelerator: 'F5', visible: false, click: () => mainWindow?.webContents.reload() },
-        { label: 'Copy link to current page', accelerator: 'CmdOrCtrl+Shift+C', click: copyCurrentUrl },
+        { label: 'Copy link to playing track', accelerator: 'CmdOrCtrl+Shift+C', click: () => command('copyLink') },
       ],
     },
     {
@@ -695,10 +657,111 @@ function buildMenus() {
   updateTray();
 }
 
-function copyCurrentUrl() {
-  const url = mainWindow?.webContents.getURL();
-  if (url && isSoundCloud(url)) require('electron').clipboard.writeText(url);
+function nav(page) {
+  showMain();
+  command('nav', page);
 }
+
+// ---------------------------------------------------------------------------
+// Settings (from the in-app Settings page, the tray and the menu bar)
+// ---------------------------------------------------------------------------
+
+const SETTING_KEYS = new Set([
+  'theme', 'accent', 'discordPresence', 'notifications', 'autoplay', 'closeToTray', 'miniAlwaysOnTop',
+  'openAtLogin', 'taskbarProgress', 'lowMemory', 'shuffle', 'repeat',
+]);
+
+function applySetting(key, value, after) {
+  if (!SETTING_KEYS.has(key)) return;
+  const before = store.get(key);
+  store.set(key, value);
+  if (key === 'theme') applyTheme();
+  if (key === 'discordPresence') {
+    if (value) {
+      presence?.start();
+      presence?.update(state);
+    } else presence?.stop();
+  }
+  if (key === 'openAtLogin' && (IS_WIN || IS_MAC)) app.setLoginItemSettings({ openAtLogin: !!value, args: ['--hidden'] });
+  if (key === 'miniAlwaysOnTop') miniWindow?.setAlwaysOnTop(!!value);
+  if (key === 'taskbarProgress') updateProgress();
+  if (after) after(value);
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('settings:changed', { [key]: value });
+  buildMenus();
+  if (key === 'lowMemory' && before !== value) restartApp();
+}
+
+ipcMain.handle('settings:get', (e) => {
+  if (e.sender !== mainWindow?.webContents) return null;
+  return { settings: { ...store.all(), scClientId: undefined, version: app.getVersion(), homepage: PROJECT_URL }, platform: process.platform };
+});
+ipcMain.handle('settings:set', (e, key, value) => {
+  if (e.sender !== mainWindow?.webContents) return;
+  applySetting(key, value);
+});
+
+// ---------------------------------------------------------------------------
+// SoundCloud data and sign-in
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('api', (e, method, args) => {
+  if (e.sender !== mainWindow?.webContents) throw new Error('Not allowed');
+  return scapi.call(method, Array.isArray(args) ? args : []);
+});
+
+// Sign-in happens on SoundCloud's own sign-in page in a small window; once
+// SoundCloud sets your session, the window closes by itself.
+function openLogin() {
+  if (loginWin && !loginWin.isDestroyed()) {
+    loginWin.focus();
+    return loginPromise;
+  }
+  loginWin = new BrowserWindow({
+    width: 500,
+    height: 760,
+    parent: mainWindow || undefined,
+    title: 'Sign in to SoundCloud',
+    icon: icon(IS_WIN ? 'icon.ico' : 'icon.png'),
+    autoHideMenuBar: true,
+    backgroundColor: '#121212',
+    webPreferences: { partition: 'persist:soundcloud', contextIsolation: true, sandbox: true },
+  });
+  loginWin.loadURL(SIGNIN_URL);
+  loginPromise = new Promise((resolve) => {
+    let finished = false;
+    const finish = (ok) => {
+      if (finished) return;
+      finished = true;
+      clearInterval(timer);
+      resolve(ok);
+      if (loginWin && !loginWin.isDestroyed()) loginWin.close();
+    };
+    const timer = setInterval(async () => {
+      if (await scapi.getToken()) finish(true);
+    }, 800);
+    loginWin.on('closed', () => {
+      loginWin = null;
+      scapi.getToken().then((t) => finish(!!t));
+    });
+  });
+  return loginPromise;
+}
+
+ipcMain.handle('auth:login', (e) => (e.sender === mainWindow?.webContents ? openLogin() : false));
+ipcMain.handle('auth:logout', async (e) => {
+  if (e.sender !== mainWindow?.webContents) return;
+  await scapi.logout();
+});
+
+ipcMain.on('open-external', (e, url) => {
+  if (e.sender === mainWindow?.webContents && typeof url === 'string') openExternal(url);
+});
+ipcMain.on('copy', (e, text) => {
+  if (e.sender === mainWindow?.webContents && typeof text === 'string') clipboard.writeText(text.slice(0, 2000));
+});
+ipcMain.on('mini:toggle', (e) => {
+  if (e.sender === mainWindow?.webContents) toggleMini();
+});
 
 // ---------------------------------------------------------------------------
 // Windows shortcuts (lets the portable build appear in Start / search and
@@ -764,12 +827,12 @@ function debounce(fn, ms) {
 }
 
 app.whenReady().then(() => {
-  nativeTheme.themeSource = 'dark';
+  applyTheme();
 
-  // Analytics trackers are always blocked; ads are blocked unless turned off
-  // in Settings. See adblock.js: it adds no memory.
+  // The SoundCloud session is only used for data requests and the sign-in
+  // window. Ads and trackers on the sign-in page are blocked (adds no memory).
   const ses = session.fromPartition('persist:soundcloud');
-  adblock.apply(ses, store.get('adBlock'));
+  adblock.apply(ses, true);
   // Only grant what a music site needs.
   ses.setPermissionRequestHandler((_wc, permission, cb) => {
     cb(['mediaKeySystem', 'notifications', 'clipboard-sanitized-write', 'fullscreen'].includes(permission));

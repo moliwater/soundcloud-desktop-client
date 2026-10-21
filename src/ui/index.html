@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en" data-theme="charcoal" data-accent="green">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src https: data:; media-src https: blob:; connect-src https:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<title>Soundfast</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="titlebar-drag"></div>
+<div class="app">
+  <aside class="sidebar" aria-label="Navigation">
+    <div class="brand"><div class="brand-mark" aria-hidden="true"><svg class="i f" viewBox="0 0 24 24"><path d="M9 5.5v13l10-6.5z"/></svg></div><b>Soundfast</b></div>
+    <div class="profile" id="profile"></div>
+    <nav class="nav" id="nav-main"></nav>
+    <div class="nav-label">Your library</div>
+    <nav class="nav" id="nav-lib"></nav>
+    <div class="spacer"></div>
+    <nav class="nav bottom" id="nav-bottom"></nav>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="hist">
+        <button id="back" title="Back (Alt+Left)" aria-label="Back"></button>
+        <button id="fwd" title="Forward (Alt+Right)" aria-label="Forward"></button>
+      </div>
+      <div class="tabs" id="tabs" role="tablist"></div>
+      <div class="grow"></div>
+      <label class="searchbox"><span id="search-ico"></span><input id="search" type="search" placeholder="Search artists, tracks, playlists" autocomplete="off" spellcheck="false"></label>
+    </div>
+    <div class="view" id="view" tabindex="-1"></div>
+  </main>
+
+  <aside class="player" aria-label="Now playing">
+    <div class="player-head"><h2>Now playing</h2><button class="icon-btn" id="mini" title="Mini player (Ctrl+M)" aria-label="Open mini player"></button></div>
+    <div class="np-art empty" id="np-art"></div>
+    <div class="np-title" id="np-title">Nothing playing</div>
+    <a class="np-artist" id="np-artist" href="#">Pick a track to start</a>
+    <div class="wave"><span class="t1" id="t1">0:00</span><canvas id="wave" height="68"></canvas><span class="t2" id="t2">0:00</span></div>
+    <div class="controls">
+      <button id="shuffle" title="Shuffle" aria-label="Shuffle"></button>
+      <button id="prev" title="Previous" aria-label="Previous track"></button>
+      <button class="big" id="play" title="Play" aria-label="Play"></button>
+      <button id="next" title="Next" aria-label="Next track"></button>
+      <button id="repeat" title="Repeat" aria-label="Repeat"></button>
+    </div>
+    <div class="subcontrols">
+      <button class="like" id="np-like" title="Like" aria-label="Like"></button>
+      <button id="vol-btn" title="Mute" aria-label="Mute"></button>
+      <input type="range" id="vol" min="0" max="1" step="0.01" value="1" aria-label="Volume">
+      <button id="open-sc" title="Open on SoundCloud" aria-label="Open on SoundCloud"></button>
+    </div>
+    <div class="queue-head"><h3>Up next</h3><span id="q-count"></span></div>
+    <div class="queue" id="queue"></div>
+  </aside>
+</div>
+<div class="toast" id="toast" role="status"></div>
+<audio id="audio" preload="auto"></audio>
+<script src="icons.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

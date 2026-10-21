@@ -1,8 +1,8 @@
 {
   "name": "soundfast",
   "productName": "Soundfast",
-  "version": "1.2.0",
-  "description": "A lightweight desktop app for SoundCloud on Windows, macOS and Linux.",
+  "version": "2.0.0",
+  "description": "A lightweight desktop app for SoundCloud with its own themeable interface, for Windows, macOS and Linux.",
   "main": "src/main.js",
   "homepage": "https://github.com/moliwater/soundcloud-desktop-client",
   "discordClientId": "1562261849540399305",

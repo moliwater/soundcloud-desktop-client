@@ -11,8 +11,13 @@ const DEFAULTS = {
   miniAlwaysOnTop: true,
   openAtLogin: false,
   discordPresence: true,
-  adBlock: true,
   lowMemory: true,
+  autoplay: true,
+  shuffle: false,
+  repeat: 'none',
+  theme: 'charcoal',
+  accent: 'green',
+  scClientId: null,
   zoom: 1,
   windowBounds: null,
   windowMaximized: false,
@@ -60,4 +65,8 @@ function set(key, value) {
   saveTimer = setTimeout(flush, 400);
 }
 
-module.exports = { get, set, flush };
+function all() {
+  return { ...load() };
+}
+
+module.exports = { get, set, flush, all };
