@@ -86,10 +86,7 @@ button, input, a, .row, .card, .wave { -webkit-app-region: no-drag; }
 
 /* ---- sidebar ------------------------------------------------------------ */
 .sidebar { background: var(--sidebar); display: flex; flex-direction: column; padding: 18px 16px 18px 20px; overflow-y: auto; }
-.brand { display: flex; align-items: center; gap: 10px; height: 26px; margin-bottom: 26px; }
-.brand-mark { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; background: var(--text); color: var(--bg); }
-.brand-mark svg { width: 18px; height: 18px; }
-.profile { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; margin: 4px 0 26px 4px; }
+.profile { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; margin: 14px 0 26px 4px; }
 .avatar { width: 64px; height: 64px; border-radius: 50%; background: var(--card) center/cover; margin-bottom: 10px; box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--line); }
 .profile .name { font-weight: 650; font-size: 15px; }
 .profile .where { color: var(--muted); font-size: 12px; }
@@ -284,7 +281,7 @@ input[type='range']::-webkit-slider-thumb { -webkit-appearance: none; width: 12p
 
 /* narrower windows: tuck the Now playing panel width down */
 @media (max-width: 1180px) { .app { grid-template-columns: 210px minmax(0, 1fr) 290px; } .hero-art { display: none; } .hero-body { right: 30px; } .row { grid-template-columns: 32px 44px minmax(0, 1fr) 36px 56px; } .row .extra { display: none; } .themes { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 960px) { .app { grid-template-columns: 72px minmax(0, 1fr) 280px; } .sidebar { padding: 18px 10px; align-items: center; } .profile, .nav-label, .nav button span, .brand b { display: none; } .nav button { justify-content: center; } }
+@media (max-width: 960px) { .app { grid-template-columns: 72px minmax(0, 1fr) 280px; } .sidebar { padding: 18px 10px; align-items: center; } .profile, .nav-label, .nav button span { display: none; } .nav button { justify-content: center; } }
 
 /* ---- Now playing closed: bottom playback bar ---------------------------- */
 .bottombar { display: none; }
