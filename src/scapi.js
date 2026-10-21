@@ -12,7 +12,7 @@ const API = 'https://api-v2.soundcloud.com';
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36';
 
-let clientId = store.get('scClientId') || null;
+let clientId = null; // read from settings on first use (after the app has set its data folder)
 let clientIdPromise = null;
 let meCache = null;
 const mediaCache = new Map(); // track id -> { transcodings, auth }
@@ -38,6 +38,7 @@ async function discoverClientId() {
 }
 
 async function getClientId(refresh = false) {
+  if (!clientId && !refresh) clientId = store.get('scClientId') || null;
   if (clientId && !refresh) return clientId;
   if (!clientIdPromise) {
     clientIdPromise = discoverClientId()

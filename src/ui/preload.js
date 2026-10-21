@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('sf', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSetting: (key, value) => ipcRenderer.invoke('settings:set', key, value),
   openExternal: (url) => ipcRenderer.send('open-external', url),
+  chooseBackground: () => ipcRenderer.invoke('bg:choose'),
+  clearBackground: () => ipcRenderer.invoke('bg:clear'),
   toggleMini: () => ipcRenderer.send('mini:toggle'),
   copy: (text) => ipcRenderer.send('copy', text),
   sendState: (state) => ipcRenderer.send('sc:state', state),

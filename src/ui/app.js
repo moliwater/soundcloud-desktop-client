@@ -38,9 +38,31 @@ function toast(msg, action) {
 // ---------------------------------------------------------------------------
 // Theme
 // ---------------------------------------------------------------------------
+function inkFor(hex) {
+  // Dark text on light accents, white text on dark ones.
+  const n = parseInt(hex.slice(1), 16);
+  const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  const L = 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
+  return L > 0.38 ? '#111114' : '#ffffff';
+}
+
 function applyTheme() {
-  document.documentElement.dataset.theme = settings.theme || 'charcoal';
-  document.documentElement.dataset.accent = settings.accent || 'green';
+  const root = document.documentElement;
+  root.dataset.theme = settings.theme || 'charcoal';
+  root.dataset.accent = settings.accent || 'green';
+  if (settings.accent === 'custom' && /^#[0-9a-f]{6}$/i.test(settings.accentCustom || '')) {
+    root.style.setProperty('--accent', settings.accentCustom);
+    root.style.setProperty('--accent-ink', inkFor(settings.accentCustom));
+  } else {
+    root.style.removeProperty('--accent');
+    root.style.removeProperty('--accent-ink');
+  }
+  // Custom background image (stored by the app; only loaded when set).
+  const blur = settings.bgBlur !== false;
+  root.classList.toggle('has-bg', !!settings.bgImage);
+  root.classList.toggle('bg-blur', blur);
+  root.style.setProperty('--bg-dim', `color-mix(in srgb, var(--bg) ${settings.bgDim ?? 45}%, transparent)`);
+  root.style.setProperty('--bg-image', settings.bgImage ? `url('sfbg://bg/${blur ? 'background-blur' : 'background'}.jpg?v=${Number(settings.bgImage)}')` : 'none');
   drawWave();
 }
 
@@ -307,7 +329,14 @@ const PAGES = {
     const tog = (key, label, help) => `<div class="toggle-row"><div><div class="lbl">${label}</div>${help ? `<div class="help">${help}</div>` : ''}</div><button class="switch${settings[key] ? ' on' : ''}" role="switch" aria-checked="${!!settings[key]}" data-toggle="${key}" aria-label="${label}"></button></div>`;
     return `<div class="settings"><h1 class="view-title">Settings</h1>
       <h2>Theme</h2><div class="themes">${themes.map(sw).join('')}</div>
-      <h2>Accent color</h2><div class="accents">${accents.map(([id, c]) => `<button class="accent-dot${(settings.accent || 'green') === id ? ' on' : ''}" style="background:${c}" data-accent-pick="${id}" title="${id}" aria-label="${id} accent"></button>`).join('')}</div>
+      <h2>Accent color</h2><div class="accents">${accents.map(([id, c]) => `<button class="accent-dot${(settings.accent || 'green') === id ? ' on' : ''}" style="background:${c}" data-accent-pick="${id}" title="${id}" aria-label="${id} accent"></button>`).join('')}
+        <label class="accent-custom${settings.accent === 'custom' ? ' on' : ''}${settings.accentCustom ? ' set' : ''}" style="--custom:${esc(settings.accentCustom || '#3ddc84')}" title="Pick your own color"><input type="color" id="accent-input" value="${esc(settings.accentCustom || '#3ddc84')}" aria-label="Pick your own accent color"></label></div>
+      <h2>Background</h2>
+      <div class="bg-pick"><div class="bg-thumb" style="${settings.bgImage ? `background-image:url('sfbg://bg/background.jpg?v=${Number(settings.bgImage)}')` : ''}">${settings.bgImage ? '' : 'Theme color'}</div>
+        <div><div class="help" style="color:var(--muted);font-size:12.5px;margin-bottom:10px">Use one of your own pictures (PNG or JPG) as the app background. Soundfast keeps its own copy, sized to your screen.</div>
+        <div class="btns"><button class="btn primary" data-bg="choose">${settings.bgImage ? 'Change image' : 'Choose image'}</button>${settings.bgImage ? '<button class="btn ghost" data-bg="clear">Remove</button>' : ''}</div></div></div>
+      ${settings.bgImage ? `${tog('bgBlur', 'Blur background', 'Softens the picture so text stays easy to read.')}
+      <div class="range-row"><div class="lbl">Darken background</div><input type="range" min="0" max="85" step="1" value="${settings.bgDim ?? 45}" data-range="bgDim" aria-label="Darken background"><output>${settings.bgDim ?? 45}%</output></div>` : ''}
       <h2>Playback</h2>
       ${tog('discordPresence', "Show what I'm listening to on Discord", 'Shows the track on your Discord profile while it plays.')}
       ${tog('notifications', 'Track change notifications', 'A small notification when a new track starts and Soundfast is in the background.')}
@@ -343,7 +372,15 @@ document.addEventListener('click', async (e) => {
   if (d.searchKind) return router.go('search', { q: $('search').value, kind: d.searchKind });
   if (d.themePick) return setSetting('theme', d.themePick);
   if (d.accentPick) return setSetting('accent', d.accentPick);
-  if (d.toggle) return setSetting(d.toggle, !settings[d.toggle]);
+  if (d.toggle) return setSetting(d.toggle, d.toggle === 'bgBlur' ? settings.bgBlur === false : !settings[d.toggle]);
+  if (d.bg === 'choose') {
+    try {
+      const v = await sf.chooseBackground();
+      if (v) { settings.bgImage = v; applyTheme(); rerenderSettings(); }
+    } catch (err) { toast(/could not be opened/.test(err.message) ? 'That file could not be opened as an image' : "Couldn't use that image"); }
+    return;
+  }
+  if (d.bg === 'clear') { await sf.clearBackground(); settings.bgImage = null; applyTheme(); return rerenderSettings(); }
   if (d.playall) return P.playList(lists.get(d.playall), 0, false);
   if (d.shuffleall) return P.playList(lists.get(d.shuffleall), 0, true);
   if (d.playlist || d.playlistNow) {
@@ -455,16 +492,43 @@ function syncLikes(id) {
   updateNow();
 }
 
-async function setSetting(key, value) {
+async function setSetting(key, value, rerender = true) {
   settings[key] = value;
-  if (key === 'theme' || key === 'accent') applyTheme();
+  if (['theme', 'accent', 'accentCustom', 'bgBlur', 'bgDim'].includes(key)) applyTheme();
   await sf.setSetting(key, value);
-  if (router.current().name === 'settings') {
-    const top = view.scrollTop;
-    view.innerHTML = await PAGES.settings();
-    view.scrollTop = top;
-  }
+  if (rerender) rerenderSettings();
 }
+
+async function rerenderSettings() {
+  if (router.current().name !== 'settings') return;
+  const top = view.scrollTop;
+  view.innerHTML = await PAGES.settings();
+  view.scrollTop = top;
+}
+
+// Live sliders and the custom color picker on the Settings page.
+view.addEventListener('input', (e) => {
+  const el = e.target;
+  if (el.dataset.range === 'bgDim') {
+    el.nextElementSibling.textContent = el.value + '%';
+    settings.bgDim = Number(el.value);
+    applyTheme();
+  }
+  if (el.id === 'accent-input') {
+    settings.accent = 'custom';
+    settings.accentCustom = el.value;
+    applyTheme();
+    const box = el.parentElement;
+    box.classList.add('on', 'set');
+    box.style.setProperty('--custom', el.value);
+    view.querySelectorAll('.accent-dot.on').forEach((d) => d.classList.remove('on'));
+  }
+});
+view.addEventListener('change', (e) => {
+  const el = e.target;
+  if (el.dataset.range === 'bgDim') setSetting('bgDim', Number(el.value), false);
+  if (el.id === 'accent-input') { setSetting('accentCustom', el.value, false); setSetting('accent', 'custom', false); }
+});
 
 // ---------------------------------------------------------------------------
 // Player

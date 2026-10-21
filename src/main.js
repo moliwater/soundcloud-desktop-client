@@ -4,6 +4,8 @@ const {
   BrowserWindow,
   Menu,
   clipboard,
+  dialog,
+  protocol,
   Notification,
   Tray,
   ipcMain,
@@ -16,6 +18,7 @@ const {
 } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const store = require('./store');
 const { DiscordPresence } = require('./discord');
 const adblock = require('./adblock');
@@ -71,6 +74,10 @@ if (!app.requestSingleInstanceLock()) {
     if (link) command('openUrl', link);
   });
 }
+
+// The user's own background image is served to the interface from this
+// scheme, so the interface never needs general access to files on disk.
+protocol.registerSchemesAsPrivileged([{ scheme: 'sfbg', privileges: { standard: true, secure: true } }]);
 
 app.setName('Soundfast');
 // Always keep settings and sign-in in the same folder, however the app is launched.
@@ -308,8 +315,86 @@ function toggleMain() {
 
 function overlay() {
   const t = theme();
-  return { color: t.panel, symbolColor: t.text, height: 44 };
+  // With a background image the window buttons sit on the picture.
+  return { color: store.get('bgImage') ? '#00000000' : t.panel, symbolColor: t.text, height: 44 };
 }
+
+// ---------------------------------------------------------------------------
+// Custom background image
+// ---------------------------------------------------------------------------
+
+const bgFile = (name = 'background.jpg') => path.join(app.getPath('userData'), name);
+
+// Copies the chosen picture into Soundfast's own folder, scaled down to the
+// screen size so a huge photo doesn't cost extra memory when shown.
+// Three passes of a box blur approximate a Gaussian blur.
+function blurImage(img, radius) {
+  const { width: w, height: h } = img.getSize();
+  const a = Buffer.from(img.toBitmap());
+  const b = Buffer.alloc(a.length);
+  const pass = (src, dst, len, lines, step, lineStep) => {
+    const div = radius * 2 + 1;
+    for (let line = 0; line < lines; line++) {
+      const base = line * lineStep;
+      for (let c = 0; c < 4; c++) {
+        const at = (i) => src[base + Math.min(len - 1, Math.max(0, i)) * step + c];
+        let acc = 0;
+        for (let k = -radius; k <= radius; k++) acc += at(k);
+        for (let i = 0; i < len; i++) {
+          dst[base + i * step + c] = Math.round(acc / div);
+          acc += at(i + radius + 1) - at(i - radius);
+        }
+      }
+    }
+  };
+  for (let n = 0; n < 3; n++) {
+    pass(a, b, w, h, 4, w * 4); // horizontal
+    pass(b, a, h, w, w * 4, 4); // vertical
+  }
+  return nativeImage.createFromBitmap(a, { width: w, height: h });
+}
+
+async function chooseBackground() {
+  const res = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose a background image',
+    properties: ['openFile'],
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }],
+  });
+  if (res.canceled || !res.filePaths[0]) return null;
+  let img = nativeImage.createFromPath(res.filePaths[0]);
+  if (img.isEmpty()) throw new Error('That file could not be opened as an image');
+  const disp = screen.getPrimaryDisplay();
+  const maxW = Math.min(3840, Math.round(disp.size.width * disp.scaleFactor));
+  const maxH = Math.min(2160, Math.round(disp.size.height * disp.scaleFactor));
+  const { width, height } = img.getSize();
+  const scale = Math.min(1, maxW / width, maxH / height);
+  if (scale < 1) img = img.resize({ width: Math.round(width * scale), height: Math.round(height * scale), quality: 'good' });
+  fs.writeFileSync(bgFile(), img.toJPEG(90));
+  // A pre-blurred copy for "Blur background", made once here so the window
+  // never runs a live blur effect. It is small; the window stretches it, which
+  // looks smooth because the picture is already soft.
+  const s = img.getSize();
+  const small = img.resize({ width: 480, height: Math.max(1, Math.round((480 * s.height) / s.width)), quality: 'better' });
+  fs.writeFileSync(bgFile('background-blur.jpg'), blurImage(small, 9).toJPEG(86));
+  const version = Date.now();
+  applySetting('bgImage', version);
+  return version;
+}
+
+function clearBackground() {
+  try {
+    fs.rmSync(bgFile(), { force: true });
+    fs.rmSync(bgFile('background-blur.jpg'), { force: true });
+  } catch {
+    /* already gone */
+  }
+  applySetting('bgImage', null);
+}
+
+ipcMain.handle('bg:choose', (e) => (e.sender === mainWindow?.webContents ? chooseBackground() : null));
+ipcMain.handle('bg:clear', (e) => {
+  if (e.sender === mainWindow?.webContents) clearBackground();
+});
 
 function applyTheme() {
   const t = theme();
@@ -522,7 +607,10 @@ function settingsMenu() {
   });
   const items = [
     radio('Theme', 'theme', [['charcoal', 'Charcoal'], ['midnight', 'Midnight'], ['black', 'True black'], ['light', 'Light']]),
-    radio('Accent color', 'accent', [['green', 'Green'], ['orange', 'Orange'], ['blue', 'Blue'], ['purple', 'Purple'], ['pink', 'Pink'], ['red', 'Red']]),
+    radio('Accent color', 'accent', [
+      ['green', 'Green'], ['orange', 'Orange'], ['blue', 'Blue'], ['purple', 'Purple'], ['pink', 'Pink'], ['red', 'Red'],
+      ...(store.get('accentCustom') ? [['custom', 'Custom']] : []),
+    ]),
     { type: 'separator' },
     toggle(IS_MAC ? 'Keep playing when window is closed' : 'Close to tray (keep playing)', 'closeToTray'),
     toggle('Show a notification when the track changes', 'notifications'),
@@ -670,13 +758,16 @@ function nav(page) {
 const SETTING_KEYS = new Set([
   'theme', 'accent', 'discordPresence', 'notifications', 'autoplay', 'closeToTray', 'miniAlwaysOnTop',
   'openAtLogin', 'taskbarProgress', 'lowMemory', 'shuffle', 'repeat', 'panelOpen',
+  'accentCustom', 'bgImage', 'bgBlur', 'bgDim',
 ]);
 
 function applySetting(key, value, after) {
   if (!SETTING_KEYS.has(key)) return;
+  if (key === 'accentCustom' && !/^#[0-9a-f]{6}$/i.test(String(value))) return;
+  if (key === 'bgDim') value = Math.max(0, Math.min(85, Math.round(Number(value) || 0)));
   const before = store.get(key);
   store.set(key, value);
-  if (key === 'theme') applyTheme();
+  if (key === 'theme' || key === 'bgImage') applyTheme();
   if (key === 'discordPresence') {
     if (value) {
       presence?.start();
@@ -697,7 +788,7 @@ ipcMain.handle('settings:get', (e) => {
   return { settings: { ...store.all(), scClientId: undefined, version: app.getVersion(), homepage: PROJECT_URL }, platform: process.platform };
 });
 ipcMain.handle('settings:set', (e, key, value) => {
-  if (e.sender !== mainWindow?.webContents) return;
+  if (e.sender !== mainWindow?.webContents || key === 'bgImage') return;
   applySetting(key, value);
 });
 
@@ -828,6 +919,10 @@ function debounce(fn, ms) {
 }
 
 app.whenReady().then(() => {
+  protocol.handle('sfbg', (req) => {
+    const name = new URL(req.url).pathname.includes('blur') ? 'background-blur.jpg' : 'background.jpg';
+    return net.fetch(pathToFileURL(bgFile(name)).toString());
+  });
   applyTheme();
 
   // The SoundCloud session is only used for data requests and the sign-in
