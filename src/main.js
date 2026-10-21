@@ -16,11 +16,18 @@ const {
 const fs = require('fs');
 const path = require('path');
 const store = require('./store');
+const { DiscordPresence } = require('./discord');
 
 const APP_ID = 'com.soundfast.app';
 const HOME_URL = 'https://soundcloud.com/';
 // Set "homepage" in package.json to your GitHub repo to enable the Help links.
-const PROJECT_URL = (require('../package.json').homepage || '').replace(/\/$/, '');
+const PKG = require('../package.json');
+const PROJECT_URL = (PKG.homepage || '').replace(/\/$/, '');
+// Discord shows this app's name: "Listening to <name>". Set "discordClientId"
+// in package.json to the Application ID from discord.com/developers.
+const DISCORD_CLIENT_ID = process.env.SOUNDFAST_DISCORD_ID || PKG.discordClientId || '';
+const GITHUB_REPO = (PROJECT_URL.match(/github\.com\/([^/]+\/[^/]+)/) || [])[1];
+const ICON_URL = GITHUB_REPO ? `https://raw.githubusercontent.com/${GITHUB_REPO}/main/assets/icon.png` : '';
 const ASSETS = path.join(__dirname, '..', 'assets');
 const IS_WIN = process.platform === 'win32';
 const IS_MAC = process.platform === 'darwin';
@@ -33,6 +40,8 @@ let quitting = false;
 let state = { hasTrack: false, playing: false, title: '', artist: '', position: 0, duration: 0 };
 let lastNotifiedKey = '';
 let lastBlur = 0;
+let presence = null;
+let trimTimer = null;
 
 // ---------------------------------------------------------------------------
 // Startup
@@ -49,11 +58,34 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.setName('Soundfast');
+// Always keep settings and sign-in in the same folder, however the app is launched.
+app.setPath('userData', path.join(app.getPath('appData'), 'Soundfast'));
 if (IS_WIN) app.setAppUserModelId(APP_ID);
 
-// Keep audio and the now-playing info flowing when the window is hidden.
-app.commandLine.appendSwitch('disable-renderer-backgrounding');
-app.commandLine.appendSwitch('disable-background-timer-throttling');
+// ---- Memory -----------------------------------------------------------------
+// Chromium extras a single-site app doesn't need:
+//  - a spare, pre-started page process kept around "just in case"
+//  - the back/forward cache, which keeps whole old pages alive in memory
+app.commandLine.appendSwitch('disable-features', 'SpareRendererForSitePerProcess,BackForwardCache');
+// Low memory mode (on by default, Settings to turn off; needs a restart).
+// Measured roughly halving total memory compared with Soundfast 1.0.0:
+//  - no GPU acceleration, and the remaining compositor runs inside the main
+//    process instead of a separate GPU process
+//  - networking runs inside the main process instead of its own process
+//  - embedded third-party frames (ads, sign-in widgets) share SoundCloud's page
+//    process instead of each getting their own process
+//  - Chromium's low-end-device tuning and V8's optimize-for-size mode: smaller
+//    caches and a more eagerly collected JavaScript heap
+if (store.get('lowMemory')) {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch('in-process-gpu');
+  app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess,NetworkServiceInProcess2');
+  app.commandLine.appendSwitch('disable-site-isolation-trials');
+  app.commandLine.appendSwitch('enable-low-end-device-mode');
+  app.commandLine.appendSwitch('js-flags', '--optimize-for-size');
+}
+// Playback keeps going while hidden either way: Chromium never throttles a page
+// that is playing audio, so the window is allowed to go idle in the background.
 
 // Look like a normal Chrome browser so SoundCloud (and sign-in pages) treat
 // the app as a supported browser.
@@ -175,7 +207,6 @@ function createMainWindow() {
       partition: 'persist:soundcloud',
       contextIsolation: true,
       sandbox: true,
-      backgroundThrottling: false,
       spellcheck: false,
     },
   });
@@ -245,7 +276,23 @@ function createMainWindow() {
     mainWindow = null;
   });
 
-  mainWindow.on('show', updateThumbar);
+  mainWindow.on('show', () => {
+    updateThumbar();
+    clearInterval(trimTimer);
+    trimTimer = null;
+  });
+  // Free image and script caches while the window is hidden or minimized.
+  const startTrimming = () => {
+    clearInterval(trimTimer);
+    setTimeout(() => command('trim'), 5000);
+    trimTimer = setInterval(() => command('trim'), 5 * 60 * 1000);
+  };
+  mainWindow.on('hide', startTrimming);
+  mainWindow.on('minimize', startTrimming);
+  mainWindow.on('restore', () => {
+    clearInterval(trimTimer);
+    trimTimer = null;
+  });
   mainWindow.on('blur', () => (lastBlur = Date.now()));
 }
 
@@ -313,6 +360,7 @@ ipcMain.on('sc:state', (e, next) => {
   updateProgress();
 
   if (miniWindow && !miniWindow.isDestroyed()) miniWindow.webContents.send('mini:state', state);
+  presence?.update(state);
 });
 
 // Real mouse click inside the page (used for seeking on the timeline).
@@ -486,7 +534,20 @@ function settingsMenu() {
     toggle('Show a notification when the track changes', 'notifications'),
     toggle('Mini player always on top', 'miniAlwaysOnTop', (on) => miniWindow?.setAlwaysOnTop(on)),
   ];
+  if (presence?.configured) {
+    items.unshift(
+      toggle("Show what I'm listening to on Discord", 'discordPresence', (on) => {
+        if (on) {
+          presence.start();
+          presence.update(state);
+        } else {
+          presence.stop();
+        }
+      })
+    );
+  }
   if (IS_WIN) items.push(toggle('Show track progress on the taskbar', 'taskbarProgress', updateProgress));
+  items.push(toggle('Low memory mode (restarts Soundfast)', 'lowMemory', restartApp));
   if (IS_WIN || IS_MAC) {
     items.push(
       toggle(IS_WIN ? 'Start with Windows' : 'Open at login', 'openAtLogin', (on) =>
@@ -661,6 +722,13 @@ function quit() {
   app.quit();
 }
 
+function restartApp() {
+  store.flush();
+  quitting = true;
+  app.relaunch({ args: process.argv.slice(1).filter((a) => a !== '--hidden') });
+  app.quit();
+}
+
 function debounce(fn, ms) {
   let t;
   return (...args) => {
@@ -682,6 +750,13 @@ app.whenReady().then(() => {
     cb(['mediaKeySystem', 'notifications', 'clipboard-sanitized-write', 'fullscreen'].includes(permission));
   });
 
+  presence = new DiscordPresence({
+    clientId: DISCORD_CLIENT_ID,
+    iconUrl: ICON_URL,
+    log: (msg) => console.log(`[discord] ${msg}`),
+  });
+  if (store.get('discordPresence')) presence.start();
+
   createMainWindow();
   createTray();
   buildMenus();
@@ -695,6 +770,7 @@ app.on('activate', showMain);
 
 app.on('before-quit', () => {
   quitting = true;
+  presence?.stop();
   store.flush();
 });
 

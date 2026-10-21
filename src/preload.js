@@ -1,7 +1,7 @@
 // Runs inside the SoundCloud page (isolated from SoundCloud's own scripts).
 // It reads what is playing from SoundCloud's player bar and presses its buttons
 // when you use media keys, the tray, the taskbar buttons or the mini player.
-const { ipcRenderer } = require('electron');
+const { ipcRenderer, webFrame } = require('electron');
 
 const SEL = {
   play: '.playControls__play',
@@ -149,6 +149,10 @@ const actions = {
     // The main process sends a real mouse click here, which SoundCloud's
     // timeline accepts more reliably than a synthetic DOM event.
     ipcRenderer.send('sc:click-at', { x: r.left + r.width * f, y: r.top + r.height / 2 });
+  },
+  trim() {
+    // Drop decoded images and cached resources the page isn't using right now.
+    webFrame.clearCache();
   },
   focusSearch() {
     const input = document.querySelector('input[type="search"], .headerSearch__input');

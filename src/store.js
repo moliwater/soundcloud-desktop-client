@@ -10,6 +10,8 @@ const DEFAULTS = {
   taskbarProgress: false,
   miniAlwaysOnTop: true,
   openAtLogin: false,
+  discordPresence: true,
+  lowMemory: true,
   zoom: 1,
   windowBounds: null,
   windowMaximized: false,

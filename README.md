@@ -11,6 +11,8 @@ Soundfast loads SoundCloud's own web player inside a dedicated app window. You s
 - **Keeps playing in the tray.** Closing the window hides it to the tray. Right-click the tray icon for play/pause, next, previous, like and settings.
 - **Mini player.** A small always-on-top player with artwork, controls, like and a seek bar (`Ctrl+M`).
 - **Taskbar buttons.** Hover Soundfast on the Windows taskbar for previous / play-pause / next buttons.
+- **Discord status.** Shows "Listening to SoundCloud" on your Discord profile with the track, artist, artwork, a progress bar and a "Listen on SoundCloud" button. Clears when you pause. Turn it off in Settings.
+- **Light on memory.** Low memory mode (on by default) uses roughly half the memory of a normal browser setup.
 - **Track notifications.** A small notification with the artwork when a new track starts (only while Soundfast isn't focused).
 - **Start with Windows** (optional), starting quietly in the tray.
 - **Links behave.** SoundCloud pages open in the app; everything else opens in your normal browser.
@@ -20,9 +22,9 @@ Soundfast loads SoundCloud's own web player inside a dedicated app window. You s
 
 ### Windows
 
-Download `Soundfast-1.0.0-win-x64.zip` (or the installer) from the [Releases page](https://github.com/moliwater/soundcloud-desktop-client/releases), extract it anywhere (for example `Documents\Soundfast`), and run `Soundfast.exe`.
+Download `Soundfast-Setup-<version>.exe` from the [Releases page](https://github.com/moliwater/soundcloud-desktop-client/releases) and run it. It installs Soundfast with Start menu and desktop shortcuts.
 
-On first launch Soundfast adds itself to the Start menu so you can find it by searching "Soundfast". Right-click the tray icon → **Settings** → **Create desktop shortcut** if you want one on the desktop.
+Prefer not to install? Download `Soundfast-Portable-<version>.exe` instead and run it from anywhere.
 
 Because the app isn't code-signed, Windows SmartScreen may say "Windows protected your PC" the first time. Click **More info → Run anyway**. (Code-signing certificates cost money; this is normal for small open-source apps.)
 
@@ -76,14 +78,34 @@ On macOS use `Cmd` instead of `Ctrl`. Press `Alt` to show the menu bar.
 
 Right-click the tray icon (or press `Alt` → **Soundfast** → **Settings**):
 
+- Show what I'm listening to on Discord — on by default
 - Close to tray (keep playing) — on by default
 - Notification when the track changes — on by default
 - Mini player always on top — on by default
 - Show track progress on the taskbar — off by default
 - Start with Windows — off by default
+- Low memory mode — on by default (restarts the app when changed)
 - Create desktop shortcut
 
 Settings are stored in `%APPDATA%\Soundfast\settings.json` on Windows.
+
+## Memory use
+
+Most of the memory goes to SoundCloud's own web player, which is a large web app. Low memory mode (on by default) cuts what Soundfast adds on top of it:
+
+- no GPU acceleration, and the remaining drawing work runs in the main process instead of a separate GPU process
+- networking runs in the main process instead of its own process
+- ads and sign-in widgets embedded in SoundCloud's pages share one page process instead of one each
+- Chromium's low-end-device tuning and V8's optimize-for-size mode (smaller caches, tighter JavaScript memory)
+- image and script caches are freed while the window is hidden in the tray
+
+In testing this went from 7 processes and ~890 MB to 2 processes and ~400 MB on the same page. If scrolling ever feels sluggish on your PC, turn low memory mode off in Settings.
+
+## Discord status
+
+Soundfast talks only to the Discord app running on your own computer (the same local connection games use). Nothing is sent if Discord isn't open or the setting is off.
+
+To use your own Discord application (the name people see after "Listening to"), create one at [discord.com/developers/applications](https://discord.com/developers/applications) and put its Application ID in `discordClientId` in `package.json`. No images need uploading; track artwork is used automatically.
 
 ## How it works
 
@@ -93,6 +115,7 @@ Settings are stored in `%APPDATA%\Soundfast\settings.json` on Windows.
 | `src/preload.js` | Runs inside the SoundCloud page: reads what's playing from SoundCloud's player bar and presses its buttons when you use media keys, the tray or the mini player |
 | `src/mini.html`, `src/mini.js` | The mini player |
 | `src/offline.html` | Shown when SoundCloud can't be reached; retries automatically |
+| `src/discord.js` | Discord status, talking directly to the Discord app (no dependencies) |
 | `src/store.js` | Settings file |
 
 If SoundCloud redesigns its player bar and the tray or mini player stop showing the current track, the class names to update are in the `SEL` list at the top of `src/preload.js`.
