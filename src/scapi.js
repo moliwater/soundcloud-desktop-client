@@ -75,19 +75,26 @@ async function logout() {
 
 // ---- requests ------------------------------------------------------------
 
-async function request(pathOrUrl, { method = 'GET', body, auth = true, retry = true } = {}) {
+async function request(pathOrUrl, { method = 'GET', body, form, auth = true, retry = true } = {}) {
   const id = await getClientId();
   let url = pathOrUrl.startsWith('http') ? pathOrUrl : API + pathOrUrl;
   if (!/[?&]client_id=/.test(url)) url += (url.includes('?') ? '&' : '?') + `client_id=${id}`;
   const headers = { 'User-Agent': UA, Accept: 'application/json, text/plain, */*' };
   const token = auth ? await getToken() : null;
   if (token) headers.Authorization = `OAuth ${token}`;
-  if (body) headers['Content-Type'] = 'application/json';
-  const res = await ses().fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  let payload;
+  if (body) {
+    headers['Content-Type'] = 'application/json';
+    payload = JSON.stringify(body);
+  } else if (form) {
+    headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
+    payload = new URLSearchParams(form).toString();
+  }
+  const res = await ses().fetch(url, { method, headers, body: payload });
   if ((res.status === 401 || res.status === 403) && retry && !token) {
     // The public client id rotates now and then; fetch a fresh one once.
     await getClientId(true);
-    return request(pathOrUrl, { method, body, auth, retry: false });
+    return request(pathOrUrl, { method, body, form, auth, retry: false });
   }
   if (!res.ok) {
     const err = new Error(`SoundCloud returned ${res.status}`);
@@ -152,6 +159,7 @@ function user(u) {
     banner: u.visuals && u.visuals.visuals && u.visuals.visuals[0] ? u.visuals.visuals[0].visual_url : '',
     city: [u.city, u.country_code].filter(Boolean).join(', '),
     followers: u.followers_count || 0,
+    following: u.followings_count || 0,
     tracks: u.track_count || 0,
     url: u.permalink_url,
     description: (u.description || '').slice(0, 600),
@@ -288,6 +296,46 @@ const methods = {
     return page(res, user);
   },
 
+  // Followers / following of any user.
+  async people(id, kind = 'followers', next) {
+    const path = kind === 'following' ? 'followings' : 'followers';
+    const res = await request(next || `/users/${id}/${path}?limit=40`);
+    return page(res, user);
+  },
+
+  async userName(id) {
+    const u = await request(`/users/${id}`);
+    return { id: u.id, name: u.username, followers: u.followers_count || 0, following: u.followings_count || 0 };
+  },
+
+  async track(id) {
+    const t = await request(`/tracks/${id}`);
+    const x = track(t);
+    return x && { ...x, comments: t.comment_count || 0, commentable: t.commentable !== false, description: (t.description || '').slice(0, 2000) };
+  },
+
+  async comments(trackId, next) {
+    const res = await request(next || `/tracks/${trackId}/comments?threaded=0&sort=newest&limit=30`);
+    return {
+      items: (res.collection || []).map((c) => ({
+        id: c.id,
+        body: c.body || '',
+        at: typeof c.timestamp === 'number' && isFinite(c.timestamp) ? Math.floor(c.timestamp / 1000) : null,
+        created: c.created_at || '',
+        user: c.user ? { id: c.user.id, name: c.user.username, avatar: art(c.user.avatar_url) } : { id: c.user_id, name: '', avatar: '' },
+      })),
+      next: res.next_href || null,
+    };
+  },
+
+  // Playlists you own (only these can have tracks added).
+  async myPlaylists() {
+    const me = (await methods.status()).me;
+    if (!me) return [];
+    const res = await request(`/users/${me.id}/playlists_without_albums?limit=200`);
+    return (res.collection || []).filter((p) => p.user && p.user.id === me.id).map(playlist);
+  },
+
   async playlist(id) {
     const isSystem = String(id).startsWith('soundcloud:system-playlists');
     const p = await request(isSystem ? `/system-playlists/${encodeURIComponent(id)}` : `/playlists/${id}?representation=full`);
@@ -366,6 +414,46 @@ const methods = {
     if (!me) throw new Error('Sign in to like tracks');
     await request(`/users/${me.id}/track_likes/${trackId}`, { method: liked ? 'PUT' : 'DELETE' });
     return liked;
+  },
+
+  // Request formats below match what soundcloud.com itself sends.
+  async postComment(trackId, text, atSeconds) {
+    if (!(await getToken())) throw new Error('Sign in to comment');
+    const bodyText = String(text || '').trim();
+    if (!bodyText) throw new Error('Write something first');
+    const form = { body: bodyText };
+    if (typeof atSeconds === 'number' && isFinite(atSeconds) && atSeconds >= 0) form.timestamp = String(Math.floor(atSeconds * 1000));
+    const c = await request(`/tracks/${trackId}/comments`, { method: 'POST', form });
+    const me = (await methods.status()).me;
+    return {
+      id: c && c.id,
+      body: (c && c.body) || bodyText,
+      at: c && typeof c.timestamp === 'number' ? Math.floor(c.timestamp / 1000) : form.timestamp ? Math.floor(Number(form.timestamp) / 1000) : null,
+      created: (c && c.created_at) || new Date().toISOString(),
+      user: me ? { id: me.id, name: me.name, avatar: me.avatar } : { id: 0, name: 'You', avatar: '' },
+    };
+  },
+
+  async addToPlaylist(playlistId, trackId) {
+    if (!(await getToken())) throw new Error('Sign in to edit playlists');
+    const p = await request(`/playlists/${playlistId}?representation=full`);
+    const ids = (p.tracks || []).map((t) => t.id);
+    if (ids.includes(trackId)) return { already: true, title: p.title };
+    if (ids.length >= 500) throw new Error('This playlist is full (500 tracks)');
+    ids.push(trackId);
+    await request(`/playlists/${playlistId}`, { method: 'PUT', body: { playlist: { tracks: ids } } });
+    return { added: true, title: p.title, count: ids.length };
+  },
+
+  async createPlaylist(title, isPrivate, trackIds = []) {
+    if (!(await getToken())) throw new Error('Sign in to create playlists');
+    const name = String(title || '').trim();
+    if (!name) throw new Error('Give the playlist a name');
+    const res = await request('/playlists', {
+      method: 'POST',
+      body: { playlist: { title: name, sharing: isPrivate ? 'private' : 'public', tracks: trackIds.map((id) => ({ id })), _resource_type: 'playlist' } },
+    });
+    return playlist(res) || { kind: 'playlist', id: res && res.id, title: name };
   },
 
   async recordPlay(trackId) {

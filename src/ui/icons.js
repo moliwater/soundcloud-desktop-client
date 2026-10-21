@@ -27,6 +27,9 @@ const ICONS = {
   music: 'M9 18.5a2.5 2.5 0 1 1-2.5-2.5H9V5l11-2v13M20 16a2.5 2.5 0 1 1-2.5-2.5H20',
   panel: 'M3 5h18v14H3zM15 5v14',
   close: 'M6 6l12 12M18 6 6 18',
+  comment: 'M4 5h16v11H9l-5 4z',
+  plus: 'M12 5v14M5 12h14',
+  check: 'M5 12.5l4.5 4.5L19 7',
   wifi: 'M2 8.5a15 15 0 0 1 20 0M5.5 12a10 10 0 0 1 13 0M9 15.5a5 5 0 0 1 6 0M12 19h.01',
 };
 const FILLED = new Set(['play', 'pause', 'prev', 'next']);

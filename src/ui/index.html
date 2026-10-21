@@ -32,7 +32,7 @@
     <div class="bottombar" id="bottombar" aria-label="Playback">
       <div class="bb-left">
         <button class="bb-art" id="bb-art" title="Show Now playing" aria-label="Show Now playing"></button>
-        <div class="bb-text"><div class="bb-title" id="bb-title">Nothing playing</div><a class="bb-artist" id="bb-artist" href="#"></a></div>
+        <div class="bb-text"><button class="bb-title" id="bb-title" title="Open track page">Nothing playing</button><a class="bb-artist" id="bb-artist" href="#"></a></div>
         <button class="bb-like" id="bb-like" title="Like" aria-label="Like"></button>
       </div>
       <div class="bb-center">
@@ -46,6 +46,8 @@
         <div class="bb-progress"><span id="bb-t1">0:00</span><div class="bb-bar" id="bb-bar" role="slider" aria-label="Seek" tabindex="0"><div class="bb-fill" id="bb-fill"></div><div class="bb-knob" id="bb-knob"></div></div><span id="bb-t2">0:00</span></div>
       </div>
       <div class="bb-right">
+        <button id="bb-add" title="Add to playlist" aria-label="Add to playlist"></button>
+        <button id="bb-comments" title="Comments" aria-label="Comments"></button>
         <button id="bb-vol-btn" title="Mute" aria-label="Mute"></button>
         <input type="range" id="bb-vol" min="0" max="1" step="0.01" value="1" aria-label="Volume">
         <button id="bb-mini" title="Mini player (Ctrl+M)" aria-label="Open mini player"></button>
@@ -57,7 +59,7 @@
   <aside class="player" aria-label="Now playing">
     <div class="player-head"><h2>Now playing</h2><button class="icon-btn" id="mini" title="Mini player (Ctrl+M)" aria-label="Open mini player"></button><button class="icon-btn" id="close-panel" title="Close Now playing (Ctrl+B)" aria-label="Close Now playing"></button></div>
     <div class="np-art empty" id="np-art"></div>
-    <div class="np-title" id="np-title">Nothing playing</div>
+    <button class="np-title" id="np-title" title="Open track page">Nothing playing</button>
     <a class="np-artist" id="np-artist" href="#">Pick a track to start</a>
     <div class="wave"><span class="t1" id="t1">0:00</span><canvas id="wave" height="68"></canvas><span class="t2" id="t2">0:00</span></div>
     <div class="controls">
@@ -69,6 +71,8 @@
     </div>
     <div class="subcontrols">
       <button class="like" id="np-like" title="Like" aria-label="Like"></button>
+      <button id="np-add" title="Add to playlist" aria-label="Add to playlist"></button>
+      <button id="np-comments" title="Comments" aria-label="Comments"></button>
       <button id="vol-btn" title="Mute" aria-label="Mute"></button>
       <input type="range" id="vol" min="0" max="1" step="0.01" value="1" aria-label="Volume">
       <button id="open-sc" title="Open on SoundCloud" aria-label="Open on SoundCloud"></button>
@@ -77,6 +81,7 @@
     <div class="queue" id="queue"></div>
   </aside>
 </div>
+<div class="modal" id="modal" hidden></div>
 <div class="toast" id="toast" role="status"></div>
 <audio id="audio" preload="auto"></audio>
 <script src="icons.js"></script>

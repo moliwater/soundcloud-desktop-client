@@ -80,7 +80,7 @@ function renderSidebar() {
     navBtn(['settings', 'Settings', 'settings']) +
     (loggedIn ? `<button data-act="logout" title="Sign out">${icon('logout')}<span>Sign out</span></button>` : '');
   $('profile').innerHTML = loggedIn
-    ? `<div class="avatar"${bg(me.avatar, 't200x200')}></div><button class="name" data-go="artist:${me.id}">${esc(me.name)}</button><div class="where">${esc(me.city || plural(me.followers, 'follower'))}</div>`
+    ? `<button class="avatar" data-go="artist:${me.id}" title="Your profile" aria-label="Your profile"${bg(me.avatar, 't200x200')}></button><button class="name" data-go="artist:${me.id}">${esc(me.name)}</button><div class="where">${esc(me.city || plural(me.followers, 'follower'))}</div>`
     : `<div class="avatar"></div><div class="name">Welcome</div><div class="where">Sign in for your likes and feed</div><button class="signin" data-act="login">Sign in</button>`;
   markNav();
 }
@@ -189,9 +189,9 @@ function trackRows(tracks, { offset = 0, listId, extra } = {}) {
       return `<div class="row${locked ? ' locked' : ''}${cur && cur.id === t.id ? ' now' : ''}" data-play="${lid}:${i}" data-tid="${t.id}">
         <div class="n"><span>${offset + i + 1}</span>${icon('play')}</div>
         <div class="thumb"${bg(t.artwork, 't67x67')}></div>
-        <div style="min-width:0"><div class="title">${esc(t.title)}${badge}</div><button class="by" data-go="artist:${t.user.id}">${esc(t.artist)}</button></div>
+        <div style="min-width:0"><button class="title" data-go="track:${t.id}" title="Open track page">${esc(t.title)}${badge}</button><button class="by" data-go="artist:${t.user.id}">${esc(t.artist)}</button></div>
         <div class="extra">${esc(extra ? extra(t) : t.plays ? plural(t.plays, 'play') : t.genre)}</div>
-        <button class="like${liked.has(t.id) ? ' on' : ''}" data-like="${t.id}" title="Like" aria-label="Like">${icon('heart')}</button>
+        <div class="acts"><button class="add" data-addpl="${t.id}" title="Add to playlist" aria-label="Add to playlist">${icon('plus')}</button><button class="like${liked.has(t.id) ? ' on' : ''}" data-like="${t.id}" title="Like" aria-label="Like">${icon('heart')}</button></div>
         <div class="dur">${fmt(t.duration)}</div>
       </div>`;
     })
@@ -275,7 +275,7 @@ const PAGES = {
 
   async library() {
     const res = await sf.api('library');
-    const html = `<h1 class="view-title">Playlists and albums</h1>`;
+    const html = `<div class="section-head" style="align-items:center"><h1 class="view-title">Playlists and albums</h1><button class="btn primary" data-newpl="1">${icon('plus')}New playlist</button></div>`;
     if (!res.items.length) return html + empty('playlists', 'No playlists yet', 'Playlists and albums you make or like on SoundCloud show up here.');
     return html + `<div data-grid>${cards(res.items, 'grid')}</div>${res.next ? `<button class="btn ghost more" data-more-grid="${esc(res.next)}">Show more</button>` : ''}`;
   },
@@ -309,11 +309,42 @@ const PAGES = {
     const a = await sf.api('artist', id);
     const topId = regList(a.top);
     let html = `<div class="page-head"><div class="cover round"${bg(a.avatar, 't500x500')}></div><div style="min-width:0"><div class="kind">Artist</div><h1>${esc(a.name)}</h1>
-      <div class="meta">${plural(a.followers, 'follower')} · ${plural(a.tracks, 'track')}${a.city ? ' · ' + esc(a.city) : ''}</div>
+      <div class="meta"><button data-go="people:${a.id}:followers">${plural(a.followers, 'follower')}</button> · <button data-go="people:${a.id}:following">${num(a.following)} following</button> · ${plural(a.tracks, 'track')}${a.city ? ' · ' + esc(a.city) : ''}</div>
       <div class="actions">${a.top.length ? `<button class="btn primary" data-playall="${topId}">${icon('play')}Play</button>` : ''}<button class="btn ghost" data-ext="${esc(a.url)}">${icon('external')}SoundCloud</button></div></div></div>`;
     if (a.top.length) html += section('Popular', `<div class="list" data-list="${topId}">${trackRows(a.top, { listId: topId })}</div>`);
     if (a.latest.items.length) html += section('Latest', listBlock(a.latest.items, a.latest.next, { extra: (t) => (t.created ? new Date(t.created).toLocaleDateString() : '') }));
     if (!a.top.length && !a.latest.items.length) html += empty('music', 'No tracks yet', `${a.name} hasn't uploaded any public tracks.`);
+    return html;
+  },
+
+  async people(arg) {
+    const [idStr, kind = 'followers'] = String(arg).split(':');
+    const id = Number(idStr);
+    const [u, res] = await Promise.all([sf.api('userName', id), sf.api('people', id, kind)]);
+    const mine = loggedIn && me && me.id === id;
+    const title = kind === 'following' ? (mine ? 'People you follow' : `${u.name} follows`) : mine ? 'Your followers' : `${u.name}'s followers`;
+    const pills = `<div class="pills"><button class="${kind === 'followers' ? 'on' : ''}" data-go="people:${id}:followers">${plural(u.followers, 'follower')}</button><button class="${kind === 'following' ? 'on' : ''}" data-go="people:${id}:following">${num(u.following)} following</button></div>`;
+    let html = `<h1 class="view-title">${esc(title)}</h1>${pills}`;
+    if (!res.items.length) return html + empty('users', kind === 'following' ? 'Not following anyone yet' : 'No followers yet', kind === 'following' ? `${u.name} doesn't follow anyone yet.` : `Nobody follows ${u.name} yet.`);
+    return html + `<div data-grid>${cards(res.items, 'grid')}</div>${res.next ? `<button class="btn ghost more" data-more-grid="${esc(res.next)}">Show more</button>` : ''}`;
+  },
+
+  async track(id) {
+    const [t, cm] = await Promise.all([sf.api('track', id), sf.api('comments', id).catch(() => ({ items: [], next: null }))]);
+    if (!t) return empty('music', 'Track not found', 'It may have been removed or made private.');
+    const lid = regList([t]);
+    const isNow = P.current() && P.current().id === t.id;
+    let html = `<div class="page-head"><div class="cover"${bg(t.artwork, 't500x500')}></div><div style="min-width:0"><div class="kind">Track${t.genre ? ' · ' + esc(t.genre) : ''}</div><h1>${esc(t.title)}</h1>
+      <div class="meta"><button data-go="artist:${t.user.id}">${esc(t.artist)}</button> · ${plural(t.plays, 'play')} · ${plural(t.likes, 'like')} · ${fmt(t.duration)}</div>
+      <div class="actions"><button class="btn primary" data-play="${lid}:0">${icon('play')}${isNow ? 'Play from start' : 'Play'}</button><button class="btn ghost" data-like-btn="${t.id}">${icon('heart')}${liked.has(t.id) ? 'Liked' : 'Like'}</button><button class="btn ghost" data-addpl="${t.id}">${icon('plus')}Add to playlist</button><button class="btn ghost" data-ext="${esc(t.url)}">${icon('external')}SoundCloud</button></div></div></div>`;
+    if (t.description) html += `<p class="desc">${esc(t.description)}</p>`;
+    trackPageTrack = t;
+    html += `<section class="section" id="comments"><div class="section-head"><h2>${plural(t.comments, 'comment')}</h2></div>`;
+    if (!t.commentable) html += `<p class="desc">Comments are turned off for this track.</p>`;
+    else if (!loggedIn) html += `<div class="comment-form"><div class="me"></div><button class="btn ghost" data-act="login">Sign in to comment</button></div>`;
+    else html += `<form class="comment-form" id="comment-form"><div class="me"${bg(me.avatar, 't67x67')}></div><div class="box"><input id="comment-input" type="text" placeholder="Write a comment" autocomplete="off" aria-label="Write a comment"><span class="at" id="comment-at"></span><button class="btn primary" type="submit">Post</button></div></form>`;
+    html += `<div class="comments" id="comment-list">${cm.items.map(commentHtml).join('') || (t.commentable ? '<p class="desc" id="no-comments">No comments yet.</p>' : '')}</div>${cm.next ? `<button class="btn ghost more" data-more-comments="${esc(cm.next)}">Show more comments</button>` : ''}</section>`;
+    setTimeout(updateCommentAt, 0);
     return html;
   },
 
@@ -369,6 +400,11 @@ document.addEventListener('click', async (e) => {
   if (d.act === 'logout') return logout();
   if (d.act === 'retry') return render();
   if (d.like) { e.stopPropagation(); return toggleLike(Number(d.like)); }
+  if (d.likeBtn) { await toggleLike(Number(d.likeBtn)); el.innerHTML = icon('heart') + (liked.has(Number(d.likeBtn)) ? 'Liked' : 'Like'); return; }
+  if (d.addpl) { e.stopPropagation(); return openAddToPlaylist(Number(d.addpl)); }
+  if (d.newpl) return openAddToPlaylist(null);
+  if (d.seek) return seekComment(Number(d.seek));
+  if (d.moreComments) return loadMoreComments(el, d.moreComments);
   if (d.ext) return sf.openExternal(d.ext);
   if (d.searchKind) return router.go('search', { q: $('search').value, kind: d.searchKind });
   if (d.themePick) return setSetting('theme', d.themePick);
@@ -398,7 +434,7 @@ document.addEventListener('click', async (e) => {
     e.preventDefault();
     const [name, ...rest] = d.go.split(':');
     const arg = rest.join(':');
-    return router.go(name, name === 'artist' ? Number(arg) : arg);
+    return router.go(name, name === 'artist' || name === 'track' ? Number(arg) : arg);
   }
   if (d.play) {
     const [lid, i] = d.play.split(':');
@@ -414,6 +450,173 @@ document.addEventListener('keydown', (e) => {
   if (e.key === ' ') { e.preventDefault(); P.toggle(); }
   if (e.key === '/') { e.preventDefault(); focusSearch(); }
 });
+
+// ---------------------------------------------------------------------------
+// Comments
+// ---------------------------------------------------------------------------
+let trackPageTrack = null;
+
+function timeAgo(iso) {
+  const t = Date.parse(iso);
+  if (!t) return '';
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  const steps = [[60, 'second'], [60, 'minute'], [24, 'hour'], [7, 'day'], [4.35, 'week'], [12, 'month'], [Infinity, 'year']];
+  let v = s;
+  for (const [n, unit] of steps) {
+    if (v < n) { const r = Math.floor(v); return r <= 0 && unit === 'second' ? 'just now' : `${r} ${unit}${r === 1 ? '' : 's'} ago`; }
+    v /= n;
+  }
+  return '';
+}
+
+function commentHtml(c) {
+  const mine = loggedIn && me && c.user.id === me.id;
+  return `<div class="comment${mine ? ' mine' : ''}"><button class="pic" data-go="artist:${c.user.id}" aria-label="${esc(c.user.name)}"${bg(c.user.avatar, 't67x67')}></button>
+    <div style="min-width:0"><div class="top"><button class="who" data-go="artist:${c.user.id}">${esc(c.user.name)}</button>${c.at !== null && c.at !== undefined ? `<button class="stamp" data-seek="${c.at}" title="Play from here">at ${fmt(c.at)}</button>` : ''}<span>${esc(timeAgo(c.created))}</span></div>
+    <div class="text">${esc(c.body)}</div></div></div>`;
+}
+
+// The comment is timed to where the track is now if it is the one playing.
+function commentAt() {
+  const t = trackPageTrack;
+  return t && P.current() && P.current().id === t.id && audio.currentTime > 0 ? Math.floor(audio.currentTime) : null;
+}
+function updateCommentAt() {
+  const el = $('comment-at');
+  if (!el) return;
+  const at = commentAt();
+  el.textContent = at === null ? '' : `at ${fmt(at)}`;
+}
+
+function seekComment(at) {
+  const t = trackPageTrack;
+  if (!t) return;
+  if (P.current() && P.current().id === t.id) {
+    audio.currentTime = at;
+    if (audio.paused) P.toggle();
+  } else {
+    P.pendingSeek = at;
+    P.playList([t], 0, false);
+  }
+}
+
+async function loadMoreComments(btn, next) {
+  btn.disabled = true;
+  try {
+    const res = await sf.api('comments', trackPageTrack.id, next);
+    $('comment-list').insertAdjacentHTML('beforeend', res.items.map(commentHtml).join(''));
+    if (res.next) { btn.dataset.moreComments = res.next; btn.disabled = false; } else btn.remove();
+  } catch { btn.disabled = false; toast("Couldn't load more comments"); }
+}
+
+view.addEventListener('submit', async (e) => {
+  if (e.target.id !== 'comment-form') return;
+  e.preventDefault();
+  const input = $('comment-input');
+  const text = input.value.trim();
+  if (!text || !trackPageTrack) return;
+  const btn = e.target.querySelector('button[type="submit"]');
+  btn.disabled = true;
+  try {
+    const c = await sf.api('postComment', trackPageTrack.id, text, commentAt());
+    input.value = '';
+    const empty = $('no-comments');
+    if (empty) empty.remove();
+    $('comment-list').insertAdjacentHTML('afterbegin', commentHtml(c));
+    toast('Comment posted');
+  } catch (err) {
+    toast(/Sign in/.test(err.message) ? 'Sign in to comment' : "Couldn't post your comment");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Add to playlist / new playlist dialog
+// ---------------------------------------------------------------------------
+const modal = $('modal');
+let lastFocus = null;
+
+function closeModal() {
+  modal.hidden = true;
+  modal.innerHTML = '';
+  if (lastFocus) lastFocus.focus();
+}
+modal.addEventListener('click', (e) => { if (e.target === modal || e.target.closest('[data-close]')) closeModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.hidden) closeModal(); }, true);
+
+function findTrack(id) {
+  if (P.current() && P.current().id === id) return P.current();
+  if (trackPageTrack && trackPageTrack.id === id) return trackPageTrack;
+  for (const list of lists.values()) { const t = list.find((x) => x && x.id === id); if (t) return t; }
+  return P.queue.find((x) => x.id === id) || null;
+}
+
+async function openAddToPlaylist(trackId) {
+  if (!loggedIn) return toast('Sign in to use playlists', { label: 'Sign in', fn: login });
+  lastFocus = document.activeElement;
+  const t = trackId ? findTrack(trackId) : null;
+  const head = `<div class="dialog-head"><h2>${trackId ? 'Add to playlist' : 'New playlist'}</h2><button class="icon-btn" data-close aria-label="Close">${icon('close')}</button></div>`;
+  const trackBox = t ? `<div class="dialog-track"><div class="thumb"${bg(t.artwork, 't67x67')}></div><div style="min-width:0"><div class="t">${esc(t.title)}</div><div class="s">${esc(t.artist)}</div></div></div>` : '';
+  modal.innerHTML = `<div class="dialog" role="dialog" aria-modal="true" aria-label="${trackId ? 'Add to playlist' : 'New playlist'}">${head}${trackBox}<div class="dialog-list" id="pl-list"><div class="hint">Loading your playlists…</div></div></div>`;
+  modal.hidden = false;
+  if (!trackId) return showCreateForm(null);
+  modal.querySelector('[data-close]').focus();
+  let pls = [];
+  try { pls = await sf.api('myPlaylists'); } catch { $('pl-list').innerHTML = `<div class="hint">Couldn't load your playlists.</div>`; return; }
+  if (modal.hidden) return;
+  $('pl-list').innerHTML =
+    `<button class="pl-item new" data-pl-new><div class="cover">${icon('plus')}</div><div><div class="t">New playlist</div><div class="s">Create one with this track</div></div><span></span></button>` +
+    (pls.length ? pls.map((p) => `<button class="pl-item" data-pl="${p.id}"><div class="cover"${bg(p.artwork, 't67x67')}>${p.artwork ? '' : icon('playlists')}</div><div style="min-width:0"><div class="t">${esc(p.title)}</div><div class="s">${plural(p.count, 'track')}</div></div><span class="state"></span></button>`).join('') : `<div class="hint">You don't have any playlists yet.</div>`);
+  $('pl-list').onclick = async (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if ('plNew' in b.dataset) return showCreateForm(trackId);
+    if (!b.dataset.pl || b.disabled) return;
+    b.disabled = true;
+    try {
+      const r = await sf.api('addToPlaylist', Number(b.dataset.pl), trackId);
+      b.querySelector('.state').innerHTML = icon('check');
+      if (r.already) toast(`Already in “${r.title}”`);
+      else { b.querySelector('.s').textContent = plural(r.count, 'track'); toast(`Added to “${r.title}”`); }
+    } catch (err) {
+      b.disabled = false;
+      toast(/full/.test(err.message) ? err.message : "Couldn't add to that playlist");
+    }
+  };
+}
+
+function showCreateForm(trackId) {
+  const list = $('pl-list');
+  list.outerHTML = `<form class="create-form" id="create-form"><label>Playlist name<input type="text" id="pl-title" maxlength="100" placeholder="My playlist" autocomplete="off" required></label>
+    <div class="seg" role="radiogroup" aria-label="Who can see it"><button type="button" class="on" data-share="public" role="radio" aria-checked="true">Public</button><button type="button" data-share="private" role="radio" aria-checked="false">Private</button></div>
+    <div class="row-btns"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary">Create</button></div></form>`;
+  const form = $('create-form');
+  let isPrivate = false;
+  form.querySelector('.seg').onclick = (e) => {
+    const b = e.target.closest('[data-share]');
+    if (!b) return;
+    isPrivate = b.dataset.share === 'private';
+    form.querySelectorAll('[data-share]').forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-checked', String(x === b)); });
+  };
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const title = $('pl-title').value.trim();
+    if (!title) return $('pl-title').focus();
+    const btn = form.querySelector('[type="submit"]');
+    btn.disabled = true;
+    try {
+      const p = await sf.api('createPlaylist', title, isPrivate, trackId ? [trackId] : []);
+      closeModal();
+      toast(`Created “${p.title || title}”`, p.id ? { label: 'Open', fn: () => router.go('playlist', String(p.id)) } : null);
+      if (router.current().name === 'library') render();
+    } catch {
+      btn.disabled = false;
+      toast("Couldn't create the playlist");
+    }
+  };
+  $('pl-title').focus();
+}
 
 async function loadMore(btn, next, lid) {
   btn.disabled = true;
@@ -721,6 +924,7 @@ audio.addEventListener('timeupdate', () => {
   if (now - lastTick < 250) return;
   lastTick = now;
   $('t1').textContent = fmt(audio.currentTime);
+  updateCommentAt();
   if (settings.panelOpen !== false) drawWave();
   updateProgressBar();
   if (!P.recorded && audio.currentTime > 5 && P.current()) { P.recorded = true; sf.api('recordPlay', P.current().id).catch(() => {}); }
@@ -766,7 +970,8 @@ function updateNow() {
     artEl.innerHTML = '';
     artEl.style.backgroundImage = t.artwork ? `url('${img(t.artwork, 't500x500')}')` : '';
     $('np-title').textContent = t.title;
-    $('np-title').title = t.title;
+    $('np-title').title = `${t.title} · open track page`;
+    $('np-title').dataset.go = `track:${t.id}`;
     $('np-artist').textContent = t.artist;
     $('np-artist').dataset.go = `artist:${t.user.id}`;
     $('t2').textContent = fmt(t.duration);
@@ -776,6 +981,7 @@ function updateNow() {
     artEl.innerHTML = icon('disc');
     artEl.style.backgroundImage = '';
     $('np-title').textContent = 'Nothing playing';
+    delete $('np-title').dataset.go;
     $('np-artist').textContent = 'Pick a track to start';
     delete $('np-artist').dataset.go;
   }
@@ -783,7 +989,9 @@ function updateNow() {
   bbArt.style.backgroundImage = t && t.artwork ? `url('${img(t.artwork, 't120x120')}')` : '';
   bbArt.innerHTML = t && t.artwork ? '' : icon('disc');
   $('bb-title').textContent = t ? t.title : 'Nothing playing';
-  $('bb-title').title = t ? t.title : '';
+  $('bb-title').title = t ? `${t.title} · open track page` : '';
+  if (t) $('bb-title').dataset.go = `track:${t.id}`;
+  else delete $('bb-title').dataset.go;
   $('bb-artist').textContent = t ? t.artist : '';
   if (t) $('bb-artist').dataset.go = `artist:${t.user.id}`;
   else delete $('bb-artist').dataset.go;
@@ -901,6 +1109,13 @@ $('prev').onclick = () => P.prev();
 $('shuffle').onclick = () => P.setShuffle(!settings.shuffle);
 $('repeat').onclick = () => P.cycleRepeat();
 $('np-like').onclick = () => P.current() && toggleLike(P.current().id);
+const openComments = async () => {
+  if (!P.current()) return;
+  router.go('track', P.current().id);
+  setTimeout(() => { const c = $('comments'); if (c) c.scrollIntoView({ block: 'start' }); }, 400);
+};
+for (const id of ['np-add', 'bb-add']) $(id).onclick = () => P.current() && openAddToPlaylist(P.current().id);
+for (const id of ['np-comments', 'bb-comments']) $(id).onclick = openComments;
 $('open-sc').onclick = () => P.current() && sf.openExternal(P.current().url);
 $('mini').onclick = () => sf.toggleMini();
 
@@ -1002,6 +1217,8 @@ $('bb-repeat').innerHTML = icon('repeat');
 $('bb-like').innerHTML = icon('heart');
 $('bb-mini').innerHTML = icon('mini');
 $('bb-open').innerHTML = icon('panel');
+for (const id of ['np-add', 'bb-add']) $(id).innerHTML = icon('plus');
+for (const id of ['np-comments', 'bb-comments']) $(id).innerHTML = icon('comment');
 
 // ---------------------------------------------------------------------------
 // Remember the queue between launches
