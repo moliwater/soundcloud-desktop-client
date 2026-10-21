@@ -24,6 +24,8 @@ const DEFAULTS = {
   bgDim: 45,
   bgBlurAmount: 40,
   scClientId: null,
+  accounts: [],
+  activeAccount: null,
   zoom: 1,
   windowBounds: null,
   windowMaximized: false,

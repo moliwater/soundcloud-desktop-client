@@ -12,6 +12,7 @@
 - **Themes.** Charcoal, Midnight, True black and Light, with six accent colors or any color you pick yourself. Change them in Settings; they switch instantly.
 - **Your own background.** Use one of your own pictures (PNG or JPG) as the app background, with a blur switch, a blur strength slider and a darken slider so text stays readable. Soundfast keeps its own copy sized to your screen, and pre-blurs it once, so a background adds only about 9 MB of memory.
 - **Your SoundCloud account.** Sign in once with your normal SoundCloud login (email, Google, Facebook or Apple). Likes you add or remove in Soundfast are saved to your account.
+- **Several accounts.** Add your alt accounts and switch between them from the menu on your name in the sidebar (or Settings → Accounts). Each account stays signed in on its own, so switching never signs you out; likes, comments and playlists go to whichever account is in use.
 - **Keeps the music going.** When your queue ends, similar tracks keep playing (can be turned off). Your queue is remembered between launches.
 - **No ads.** Soundfast only plays the music, so there are no audio or banner ads.
 - **Media keys.** Play/pause, next and previous on your keyboard or headset, and the Windows media flyout, work even in the background.

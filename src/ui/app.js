@@ -80,7 +80,7 @@ function renderSidebar() {
     navBtn(['settings', 'Settings', 'settings']) +
     (loggedIn ? `<button data-act="logout" title="Sign out">${icon('logout')}<span>Sign out</span></button>` : '');
   $('profile').innerHTML = loggedIn
-    ? `<button class="avatar" data-go="artist:${me.id}" title="Your profile" aria-label="Your profile"${bg(me.avatar, 't200x200')}></button><button class="name" data-go="artist:${me.id}">${esc(me.name)}</button><div class="where">${esc(me.city || plural(me.followers, 'follower'))}</div>`
+    ? `<button class="avatar" data-go="artist:${me.id}" title="Your profile" aria-label="Your profile"${bg(me.avatar, 't200x200')}></button><button class="name acct-toggle" data-act="accounts" aria-haspopup="menu" title="Switch account">${esc(me.name)}<svg class="i chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg></button><div class="where">${esc(me.city || plural(me.followers, 'follower'))}</div>`
     : `<div class="avatar"></div><div class="name">Welcome</div><div class="where">Sign in for your likes and feed</div><button class="signin" data-act="login">Sign in</button>`;
   markNav();
 }
@@ -379,8 +379,9 @@ const PAGES = {
       ${platform === 'linux' ? '' : tog('openAtLogin', platform === 'darwin' ? 'Open at login' : 'Start with Windows', 'Starts quietly in the tray.')}
       ${platform === 'win32' ? tog('taskbarProgress', 'Show track progress on the taskbar', '') : ''}
       ${tog('lowMemory', 'Low memory mode', 'Uses less memory. Soundfast restarts when you change this.')}
-      <h2>Account</h2>
-      <div class="toggle-row"><div><div class="lbl">${loggedIn ? `Signed in as ${esc(me.name)}` : 'Not signed in'}</div><div class="help">${loggedIn ? 'Your likes, feed and playlists come from this SoundCloud account.' : 'Sign in to see your likes, feed and playlists.'}</div></div>${loggedIn ? '<button class="btn ghost" data-act="logout">Sign out</button>' : '<button class="btn primary" data-act="login">Sign in</button>'}</div>
+      <h2>Accounts</h2>
+      ${(await sf.accounts()).map((a) => `<div class="toggle-row acct-row"><div class="acct-pic"${bg(a.avatar, 't67x67')}></div><div style="flex:1;min-width:0"><div class="lbl">${esc(a.name)}${a.active ? ' <span class="badge">Using now</span>' : ''}</div><div class="help">${a.signedOut ? 'Signed out. Sign in again to use it.' : a.active ? 'Likes, comments and playlists go to this account.' : 'Stays signed in. Switch to use it.'}</div></div>${a.active ? '' : `<button class="btn primary" data-switch="${esc(a.partition)}">Switch</button>`}<button class="btn ghost" data-remove="${esc(a.partition)}" data-name="${esc(a.name)}">Sign out</button></div>`).join('') || `<div class="toggle-row"><div><div class="lbl">Not signed in</div><div class="help">Sign in to see your likes, feed and playlists.</div></div><button class="btn primary" data-act="login">Sign in</button></div>`}
+      ${loggedIn ? '<div style="margin-top:14px"><button class="btn ghost" data-act="add-account">' + icon('plus') + 'Add another account</button></div>' : ''}
       <h2>About</h2><div class="toggle-row"><div><div class="lbl">Soundfast ${esc(settings.version || '')}</div><div class="help">An independent app, not made by SoundCloud. Music and data come from SoundCloud.</div></div>${settings.homepage ? `<button class="btn ghost" data-ext="${esc(settings.homepage)}">Project page</button>` : ''}</div>
       </div>`;
   },
@@ -398,6 +399,10 @@ document.addEventListener('click', async (e) => {
   if (d.nav) return d.nav === 'search' ? focusSearch() : router.go(d.nav);
   if (d.act === 'login') return login();
   if (d.act === 'logout') return logout();
+  if (d.act === 'accounts') { e.stopPropagation(); return toggleAccountMenu(el); }
+  if (d.act === 'add-account') { closeAccountMenu(); return addAccount(); }
+  if (d.switch) { closeAccountMenu(); return switchAccount(d.switch); }
+  if (d.remove) { closeAccountMenu(); return removeAccount(d.remove, d.name); }
   if (d.act === 'retry') return render();
   if (d.like) { e.stopPropagation(); return toggleLike(Number(d.like)); }
   if (d.likeBtn) { await toggleLike(Number(d.likeBtn)); el.innerHTML = icon('heart') + (liked.has(Number(d.likeBtn)) ? 'Liked' : 'Like'); return; }
@@ -671,11 +676,64 @@ async function login() {
 }
 
 async function logout() {
+  const name = me ? me.name : '';
   await sf.logout();
   await refreshAuth();
   router.go('home');
-  toast('Signed out');
+  toast(loggedIn ? `Signed out of ${name}. Now using ${me.name}` : 'Signed out');
 }
+
+// ---- several accounts ----------------------------------------------------
+async function addAccount() {
+  const r = await sf.addAccount();
+  if (!r || !r.ok) return;
+  await afterAccountChange();
+  toast(r.already ? `${r.name} is already added. Switched to it` : `Added ${r.name || 'account'}. Now using it`);
+}
+
+async function switchAccount(partition) {
+  await sf.switchAccount(partition);
+  await afterAccountChange();
+  if (me) toast(`Now using ${me.name}`);
+}
+
+async function removeAccount(partition, name) {
+  await sf.removeAccount(partition);
+  await afterAccountChange();
+  toast(loggedIn ? `Signed out of ${name}. Now using ${me.name}` : `Signed out of ${name}`);
+}
+
+async function afterAccountChange() {
+  await refreshAuth();
+  const r = router.current();
+  if (r && (NEEDS_LOGIN.has(r.name) || r.name === 'settings' || r.name === 'home')) render();
+  else router.go('home');
+}
+
+let acctMenu = null;
+function closeAccountMenu() {
+  if (acctMenu) { acctMenu.remove(); acctMenu = null; }
+}
+async function toggleAccountMenu(anchor) {
+  if (acctMenu) return closeAccountMenu();
+  const list = await sf.accounts();
+  acctMenu = document.createElement('div');
+  acctMenu.className = 'acct-menu';
+  acctMenu.setAttribute('role', 'menu');
+  acctMenu.innerHTML =
+    list.map((a) => `<button role="menuitem" class="acct-item${a.active ? ' on' : ''}" ${a.active ? `data-go="artist:${a.id}"` : `data-switch="${esc(a.partition)}"`}><span class="acct-pic"${bg(a.avatar, 't67x67')}></span><span class="acct-name">${esc(a.name)}${a.signedOut ? '<small>Signed out</small>' : a.active ? '<small>View profile</small>' : ''}</span>${a.active ? icon('check') : ''}</button>`).join('') +
+    `<div class="acct-sep"></div><button role="menuitem" class="acct-item" data-act="add-account"><span class="acct-pic add">${icon('plus')}</span><span class="acct-name">Add account</span></button>` +
+    (loggedIn ? `<button role="menuitem" class="acct-item" data-act="logout"><span class="acct-pic add">${icon('logout')}</span><span class="acct-name">Sign out of ${esc(me.name)}</span></button>` : '');
+  const r = anchor.getBoundingClientRect();
+  acctMenu.style.top = `${r.bottom + 6}px`;
+  acctMenu.style.left = `${Math.max(10, r.left - 4)}px`;
+  document.body.appendChild(acctMenu);
+  acctMenu.addEventListener('click', () => setTimeout(closeAccountMenu, 0));
+  const first = acctMenu.querySelector('button');
+  if (first) first.focus();
+}
+document.addEventListener('click', (e) => { if (acctMenu && !e.target.closest('.acct-menu, [data-act="accounts"]')) closeAccountMenu(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAccountMenu(); });
 
 async function toggleLike(id) {
   if (!loggedIn) return toast('Sign in to like tracks', { label: 'Sign in', fn: login });
@@ -1299,5 +1357,6 @@ window.addEventListener('beforeunload', saveSession);
   router.go('home');
   await refreshAuth();
   if (loggedIn && router.current().name === 'home') render();
+  sf.refreshAccounts().catch(() => {});
   sendState();
 })();

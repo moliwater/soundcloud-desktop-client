@@ -175,7 +175,8 @@ function hardenContents(contents) {
           autoHideMenuBar: true,
           backgroundColor: '#ffffff',
           icon: icon('icon.png'),
-          webPreferences: { partition: 'persist:soundcloud', sandbox: true, contextIsolation: true },
+          // Same session as the window that opened it (each account has its own).
+          webPreferences: { session: contents.session, sandbox: true, contextIsolation: true },
         },
       };
     }
@@ -823,11 +824,12 @@ ipcMain.handle('api', (e, method, args) => {
 
 // Sign-in happens on SoundCloud's own sign-in page in a small window; once
 // SoundCloud sets your session, the window closes by itself.
-function openLogin() {
+function openLogin(partition = scapi.activePartition()) {
   if (loginWin && !loginWin.isDestroyed()) {
     loginWin.focus();
     return loginPromise;
   }
+  prepareSession(partition);
   loginWin = new BrowserWindow({
     width: 500,
     height: 760,
@@ -836,7 +838,7 @@ function openLogin() {
     icon: icon(IS_WIN ? 'icon.ico' : 'icon.png'),
     autoHideMenuBar: true,
     backgroundColor: '#121212',
-    webPreferences: { partition: 'persist:soundcloud', contextIsolation: true, sandbox: true },
+    webPreferences: { partition, contextIsolation: true, sandbox: true },
   });
   loginWin.loadURL(SIGNIN_URL);
   loginPromise = new Promise((resolve) => {
@@ -849,21 +851,143 @@ function openLogin() {
       if (loginWin && !loginWin.isDestroyed()) loginWin.close();
     };
     const timer = setInterval(async () => {
-      if (await scapi.getToken()) finish(true);
+      if (await scapi.getToken(partition)) finish(true);
     }, 800);
     loginWin.on('closed', () => {
       loginWin = null;
-      scapi.getToken().then((t) => finish(!!t));
+      scapi.getToken(partition).then((t) => finish(!!t));
     });
   });
   return loginPromise;
 }
 
-ipcMain.handle('auth:login', (e) => (e.sender === mainWindow?.webContents ? openLogin() : false));
-ipcMain.handle('auth:logout', async (e) => {
-  if (e.sender !== mainWindow?.webContents) return;
-  await scapi.logout();
+// ---------------------------------------------------------------------------
+// Accounts: each one keeps its own signed-in session, so you can switch
+// between them without signing out.
+// ---------------------------------------------------------------------------
+
+const preparedSessions = new Set();
+
+function prepareSession(partition) {
+  if (preparedSessions.has(partition)) return;
+  preparedSessions.add(partition);
+  const ses = session.fromPartition(partition);
+  adblock.apply(ses, true);
+  ses.setPermissionRequestHandler((_wc, permission, cb) => {
+    cb(['mediaKeySystem', 'notifications', 'clipboard-sanitized-write', 'fullscreen'].includes(permission));
+  });
+}
+
+const accounts = () => (Array.isArray(store.get('accounts')) ? store.get('accounts') : []);
+const saveAccounts = (list) => store.set('accounts', list);
+
+async function initAccounts() {
+  let list = accounts();
+  // Users from before accounts existed: their sign-in lives in the default session.
+  if (!list.length && (await scapi.getToken(scapi.DEFAULT_PARTITION))) list = [{ partition: scapi.DEFAULT_PARTITION }];
+  saveAccounts(list);
+  const want = store.get('activeAccount');
+  const active = list.find((a) => a.partition === want) || list[0];
+  scapi.setActive(active ? active.partition : scapi.DEFAULT_PARTITION);
+  list.forEach((a) => prepareSession(a.partition));
+  refreshAccountInfo();
+}
+
+// Keep each account's name and picture up to date for the account menu.
+async function refreshAccountInfo() {
+  const list = accounts();
+  const updated = await Promise.all(
+    list.map(async (a) => {
+      try {
+        const me = await scapi.whoAmI(a.partition);
+        return me ? { ...a, id: me.id, name: me.name, avatar: me.avatar, signedOut: false } : { ...a, signedOut: true };
+      } catch {
+        return a;
+      }
+    })
+  );
+  saveAccounts(updated);
+  return updated;
+}
+
+function accountList() {
+  const active = scapi.activePartition();
+  return accounts().map((a) => ({ partition: a.partition, id: a.id, name: a.name || 'SoundCloud account', avatar: a.avatar || '', signedOut: !!a.signedOut, active: a.partition === active }));
+}
+
+function switchAccount(partition) {
+  if (!accounts().some((a) => a.partition === partition)) return false;
+  scapi.setActive(partition);
+  store.set('activeAccount', partition);
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('auth:changed');
+  return true;
+}
+
+// Signs in a new account in a fresh session and switches to it.
+async function addAccount() {
+  const first = !accounts().length;
+  const partition = first ? scapi.DEFAULT_PARTITION : `persist:sc-account-${Date.now().toString(36)}`;
+  const ok = await openLogin(partition);
+  if (!ok) {
+    if (!first) await scapi.logout(partition);
+    return { ok: false };
+  }
+  const me = await scapi.whoAmI(partition).catch(() => null);
+  const list = accounts();
+  const same = me && list.find((a) => a.id === me.id);
+  if (same) {
+    // Already added: keep the existing one, drop the extra sign-in.
+    if (same.partition !== partition) await scapi.logout(partition);
+    switchAccount(same.partition);
+    return { ok: true, name: me.name, already: true };
+  }
+  list.push({ partition, id: me && me.id, name: me && me.name, avatar: me && me.avatar });
+  saveAccounts(list);
+  switchAccount(partition);
+  return { ok: true, name: me ? me.name : '' };
+}
+
+async function removeAccount(partition) {
+  const list = accounts();
+  if (!list.some((a) => a.partition === partition)) return;
+  await scapi.logout(partition);
+  const rest = list.filter((a) => a.partition !== partition);
+  saveAccounts(rest);
+  if (scapi.activePartition() === partition) {
+    if (rest.length) switchAccount(rest[0].partition);
+    else {
+      scapi.setActive(scapi.DEFAULT_PARTITION);
+      store.set('activeAccount', null);
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('auth:changed');
+    }
+  }
+}
+
+const fromUi = (e) => e.sender === mainWindow?.webContents;
+ipcMain.handle('auth:login', async (e) => {
+  if (!fromUi(e)) return false;
+  // Signing in again to an account whose session expired re-uses its slot.
+  const current = accounts().find((a) => a.partition === scapi.activePartition());
+  if (current) {
+    const ok = await openLogin(current.partition);
+    if (ok) refreshAccountInfo();
+    return ok;
+  }
+  const r = await addAccount();
+  return r.ok;
 });
+ipcMain.handle('auth:logout', async (e) => {
+  if (fromUi(e)) await removeAccount(scapi.activePartition());
+});
+ipcMain.handle('accounts:list', (e) => (fromUi(e) ? accountList() : []));
+ipcMain.handle('accounts:refresh', async (e) => {
+  if (!fromUi(e)) return [];
+  await refreshAccountInfo();
+  return accountList();
+});
+ipcMain.handle('accounts:add', (e) => (fromUi(e) ? addAccount() : { ok: false }));
+ipcMain.handle('accounts:switch', (e, partition) => (fromUi(e) ? switchAccount(String(partition)) : false));
+ipcMain.handle('accounts:remove', (e, partition) => (fromUi(e) ? removeAccount(String(partition)) : null));
 
 ipcMain.on('open-external', (e, url) => {
   if (e.sender === mainWindow?.webContents && typeof url === 'string') openExternal(url);
@@ -938,21 +1062,17 @@ function debounce(fn, ms) {
   };
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   protocol.handle('sfbg', (req) => {
     const name = new URL(req.url).pathname.includes('blur') ? 'background-blur.jpg' : 'background.jpg';
     return net.fetch(pathToFileURL(bgFile(name)).toString());
   });
   applyTheme();
 
-  // The SoundCloud session is only used for data requests and the sign-in
+  // SoundCloud sessions are only used for data requests and the sign-in
   // window. Ads and trackers on the sign-in page are blocked (adds no memory).
-  const ses = session.fromPartition('persist:soundcloud');
-  adblock.apply(ses, true);
-  // Only grant what a music site needs.
-  ses.setPermissionRequestHandler((_wc, permission, cb) => {
-    cb(['mediaKeySystem', 'notifications', 'clipboard-sanitized-write', 'fullscreen'].includes(permission));
-  });
+  prepareSession(scapi.DEFAULT_PARTITION);
+  await initAccounts();
 
   presence = new DiscordPresence({
     clientId: DISCORD_CLIENT_ID,

@@ -18,7 +18,19 @@ let meCache = null;
 const mediaCache = new Map(); // track id -> { transcodings, auth }
 const MEDIA_CACHE_MAX = 600;
 
-const ses = () => session.fromPartition('persist:soundcloud');
+// Each signed-in account has its own browser session (its own SoundCloud
+// login), so several accounts can stay signed in at once. `active` is the one
+// the interface is using right now.
+const DEFAULT_PARTITION = 'persist:soundcloud';
+let active = DEFAULT_PARTITION;
+const ses = (p = active) => session.fromPartition(p);
+
+function setActive(partition) {
+  if (partition === active) return;
+  active = partition;
+  meCache = null;
+}
+const activePartition = () => active;
 
 async function httpGet(url, headers = {}) {
   return ses().fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json, text/plain, */*', ...headers } });
@@ -56,31 +68,43 @@ async function getClientId(refresh = false) {
 
 // ---- auth ----------------------------------------------------------------
 
-async function getToken() {
-  const cookies = await ses().cookies.get({ name: 'oauth_token' });
+async function getToken(p = active) {
+  const cookies = await ses(p).cookies.get({ name: 'oauth_token' });
   const c = cookies.find((x) => /soundcloud\.com$/.test(x.domain.replace(/^\./, '')));
   return c ? c.value : null;
 }
 
-async function logout() {
-  meCache = null;
-  const cookies = await ses().cookies.get({});
+async function logout(p = active) {
+  if (p === active) meCache = null;
+  const s = ses(p);
+  const cookies = await s.cookies.get({});
   await Promise.all(
     cookies
       .filter((c) => /soundcloud\.com$/.test(c.domain.replace(/^\./, '')))
-      .map((c) => ses().cookies.remove(`https://${c.domain.replace(/^\./, '')}${c.path}`, c.name).catch(() => {}))
+      .map((c) => s.cookies.remove(`https://${c.domain.replace(/^\./, '')}${c.path}`, c.name).catch(() => {}))
   );
-  await ses().clearStorageData({ origins: ['https://soundcloud.com', 'https://secure.soundcloud.com'] }).catch(() => {});
+  await s.clearStorageData({ origins: ['https://soundcloud.com', 'https://secure.soundcloud.com'] }).catch(() => {});
+}
+
+// Who is signed in on a given account session (null if nobody).
+async function whoAmI(p) {
+  if (!(await getToken(p))) return null;
+  try {
+    return user(await request('/me', { partition: p }));
+  } catch (e) {
+    if (e.status === 401) return null;
+    throw e;
+  }
 }
 
 // ---- requests ------------------------------------------------------------
 
-async function request(pathOrUrl, { method = 'GET', body, form, auth = true, retry = true } = {}) {
+async function request(pathOrUrl, { method = 'GET', body, form, auth = true, retry = true, partition = active } = {}) {
   const id = await getClientId();
   let url = pathOrUrl.startsWith('http') ? pathOrUrl : API + pathOrUrl;
   if (!/[?&]client_id=/.test(url)) url += (url.includes('?') ? '&' : '?') + `client_id=${id}`;
   const headers = { 'User-Agent': UA, Accept: 'application/json, text/plain, */*' };
-  const token = auth ? await getToken() : null;
+  const token = auth ? await getToken(partition) : null;
   if (token) headers.Authorization = `OAuth ${token}`;
   let payload;
   if (body) {
@@ -90,11 +114,11 @@ async function request(pathOrUrl, { method = 'GET', body, form, auth = true, ret
     headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
     payload = new URLSearchParams(form).toString();
   }
-  const res = await ses().fetch(url, { method, headers, body: payload });
+  const res = await ses(partition).fetch(url, { method, headers, body: payload });
   if ((res.status === 401 || res.status === 403) && retry && !token) {
     // The public client id rotates now and then; fetch a fresh one once.
     await getClientId(true);
-    return request(pathOrUrl, { method, body, form, auth, retry: false });
+    return request(pathOrUrl, { method, body, form, auth, retry: false, partition });
   }
   if (!res.ok) {
     const err = new Error(`SoundCloud returned ${res.status}`);
@@ -220,20 +244,21 @@ const page = (res, map) => ({ items: (res.collection || []).map(map).filter(Bool
 
 const methods = {
   async status() {
-    const token = await getToken();
+    const p = active;
+    const token = await getToken(p);
     if (!token) {
-      meCache = null;
+      if (p === active) meCache = null;
       return { loggedIn: false };
     }
-    if (!meCache) {
-      try {
-        meCache = user(await request('/me'));
-      } catch (e) {
-        if (e.status === 401) return { loggedIn: false };
-        throw e;
-      }
+    if (meCache && p === active) return { loggedIn: true, me: meCache };
+    try {
+      const u = user(await request('/me', { partition: p }));
+      if (p === active) meCache = u;
+      return { loggedIn: true, me: u };
+    } catch (e) {
+      if (e.status === 401) return { loggedIn: false };
+      throw e;
     }
-    return { loggedIn: true, me: meCache };
   },
 
   async home() {
@@ -468,4 +493,4 @@ async function call(name, args = []) {
   return fn(...args);
 }
 
-module.exports = { call, getToken, logout, getClientId };
+module.exports = { call, getToken, logout, getClientId, whoAmI, setActive, activePartition, DEFAULT_PARTITION };
