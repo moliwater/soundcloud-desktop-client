@@ -40,8 +40,10 @@ function render(s) {
 
   const dur = current.duration || 0;
   const pos = current.position || 0;
-  $('fill').style.width = dur ? `${Math.min(100, (pos / dur) * 100)}%` : '0%';
-  $('time').textContent = current.hasTrack && dur ? `${fmt(pos)} / ${fmt(dur)}` : '';
+  if (scrub === null) {
+    $('fill').style.width = dur ? `${Math.min(100, (pos / dur) * 100)}%` : '0%';
+    $('time').textContent = current.hasTrack && dur ? `${fmt(pos)} / ${fmt(dur)}` : '';
+  }
 }
 
 const send = (name, arg) => window.soundfast.command(name, arg);
@@ -53,11 +55,37 @@ $('art').onclick = () => current.hasTrack && send('openTrack');
 $('expand').onclick = () => send('expand');
 $('close').onclick = () => send('close');
 $('pin').onclick = () => send('pin');
-$('bar').onclick = (e) => {
-  if (!current.hasTrack) return;
-  const r = $('bar').getBoundingClientRect();
-  send('seek', (e.clientX - r.left) / r.width);
-};
+// Press, hold and drag on the bar; the track jumps there on release.
+let scrub = null;
+(() => {
+  const bar = $('bar');
+  const at = (e) => { const r = bar.getBoundingClientRect(); return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); };
+  const preview = () => {
+    const dur = current.duration || 0;
+    $('fill').style.width = `${scrub * 100}%`;
+    if (dur) $('time').textContent = `${fmt(scrub * dur)} / ${fmt(dur)}`;
+  };
+  bar.addEventListener('pointerdown', (e) => {
+    if (!current.hasTrack || e.button !== 0) return;
+    e.preventDefault();
+    bar.setPointerCapture(e.pointerId);
+    bar.classList.add('scrubbing');
+    scrub = at(e);
+    preview();
+    const move = (ev) => { scrub = at(ev); preview(); };
+    const end = (ev) => {
+      bar.removeEventListener('pointermove', move);
+      bar.removeEventListener('pointerup', end);
+      bar.removeEventListener('pointercancel', end);
+      bar.classList.remove('scrubbing');
+      if (ev.type === 'pointerup') send('seek', at(ev));
+      scrub = null;
+    };
+    bar.addEventListener('pointermove', move);
+    bar.addEventListener('pointerup', end);
+    bar.addEventListener('pointercancel', end);
+  });
+})();
 
 document.addEventListener('keydown', (e) => {
   if (e.key === ' ' || e.key === 'k') { e.preventDefault(); send('playPause'); }

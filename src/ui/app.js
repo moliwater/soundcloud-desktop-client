@@ -899,13 +899,22 @@ audio.addEventListener('ended', () => P.next(true));
 audio.addEventListener('durationchange', () => {
   if (isFinite(audio.duration) && audio.duration > 0) $('t2').textContent = $('bb-t2').textContent = fmt(audio.duration);
 });
+// While the mouse is held down on a progress bar, `scrub` is where it points
+// (0-1). The bars and times follow it; the track jumps there on release.
+let scrub = null;
+const trackDuration = () => {
+  const t = P.current();
+  return audio.duration && isFinite(audio.duration) ? audio.duration : (t && t.duration) || 0;
+};
+const shownTime = () => (scrub !== null ? scrub * trackDuration() : audio.currentTime);
+
 function updateProgressBar() {
   const t = P.current();
-  const dur = audio.duration && isFinite(audio.duration) ? audio.duration : (t && t.duration) || 0;
-  const pct = dur && t ? Math.min(100, (audio.currentTime / dur) * 100) : 0;
+  const dur = trackDuration();
+  const pct = dur && t ? Math.min(100, (shownTime() / dur) * 100) : 0;
   $('bb-fill').style.width = pct + '%';
   $('bb-knob').style.left = pct + '%';
-  $('bb-t1').textContent = fmt(t ? audio.currentTime : 0);
+  $('bb-t1').textContent = fmt(t ? shownTime() : 0);
   $('bb-bar').setAttribute('aria-valuenow', String(Math.round(pct)));
 }
 audio.addEventListener('play', () => { updatePlayIcon(); sendState(); });
@@ -923,10 +932,12 @@ audio.addEventListener('timeupdate', () => {
   const now = performance.now();
   if (now - lastTick < 250) return;
   lastTick = now;
-  $('t1').textContent = fmt(audio.currentTime);
+  if (scrub === null) {
+    $('t1').textContent = fmt(audio.currentTime);
+    if (settings.panelOpen !== false) drawWave();
+    updateProgressBar();
+  }
   updateCommentAt();
-  if (settings.panelOpen !== false) drawWave();
-  updateProgressBar();
   if (!P.recorded && audio.currentTime > 5 && P.current()) { P.recorded = true; sf.api('recordPlay', P.current().id).catch(() => {}); }
   if (now - lastStateSent > 1000) sendState();
   if ('mediaSession' in navigator && isFinite(audio.duration)) {
@@ -1049,7 +1060,7 @@ function drawWave() {
   const base = css.getPropertyValue('--faint').trim();
   const t = P.current();
   const dur = audio.duration && isFinite(audio.duration) ? audio.duration : (t && t.duration) || 0;
-  const prog = dur ? audio.currentTime / dur : 0;
+  const prog = dur ? shownTime() / dur : 0;
   const n = wave ? wave.length : 56;
   const gap = 2 * dpr;
   const bw = Math.max(1, (c.width - gap * (n - 1)) / n);
@@ -1063,7 +1074,38 @@ function drawWave() {
     g.fill();
   }
 }
-$('wave').addEventListener('click', (e) => { const r = e.currentTarget.getBoundingClientRect(); P.seek((e.clientX - r.left) / r.width); });
+// Press, hold and drag on a progress bar to choose where to jump to.
+function makeScrubbable(el) {
+  const at = (e) => { const r = el.getBoundingClientRect(); return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); };
+  const show = () => {
+    $('t1').textContent = fmt(shownTime());
+    drawWave();
+    updateProgressBar();
+  };
+  el.addEventListener('pointerdown', (e) => {
+    if (!P.current() || e.button !== 0) return;
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    el.classList.add('scrubbing');
+    scrub = at(e);
+    show();
+    const move = (ev) => { scrub = at(ev); show(); };
+    const end = (ev) => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', end);
+      el.removeEventListener('pointercancel', end);
+      el.classList.remove('scrubbing');
+      const target = ev.type === 'pointerup' ? at(ev) : null;
+      scrub = null;
+      if (target !== null) P.seek(target);
+      show();
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+  });
+}
+makeScrubbable($('wave'));
 window.addEventListener('resize', () => drawWave());
 
 function updateVolume() {
@@ -1088,16 +1130,7 @@ $('bb-mini').onclick = () => sf.toggleMini();
 // Seek by clicking or dragging the bottom progress bar, or with arrow keys.
 (() => {
   const bar = $('bb-bar');
-  const at = (e) => { const r = bar.getBoundingClientRect(); return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); };
-  bar.addEventListener('pointerdown', (e) => {
-    if (!P.current()) return;
-    bar.setPointerCapture(e.pointerId);
-    P.seek(at(e));
-    const move = (ev) => P.seek(at(ev));
-    const up = () => { bar.removeEventListener('pointermove', move); bar.removeEventListener('pointerup', up); };
-    bar.addEventListener('pointermove', move);
-    bar.addEventListener('pointerup', up);
-  });
+  makeScrubbable(bar);
   bar.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowRight') audio.currentTime = Math.min(audio.currentTime + 5, audio.duration || audio.currentTime);
     if (e.key === 'ArrowLeft') audio.currentTime = Math.max(0, audio.currentTime - 5);

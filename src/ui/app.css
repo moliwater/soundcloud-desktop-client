@@ -326,7 +326,10 @@ input[type='range']::-webkit-slider-thumb { -webkit-appearance: none; width: 12p
 .bb-bar::before { content: ''; position: absolute; left: 0; right: 0; height: 4px; border-radius: 4px; background: var(--line); }
 .bb-fill { position: absolute; left: 0; height: 4px; width: 0; border-radius: 4px; background: var(--accent); }
 .bb-knob { position: absolute; left: 0; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: var(--text); opacity: 0; transition: opacity .15s; }
-.bb-bar:hover .bb-knob, .bb-bar:focus-visible .bb-knob { opacity: 1; }
+.bb-bar:hover .bb-knob, .bb-bar:focus-visible .bb-knob, .bb-bar.scrubbing .bb-knob { opacity: 1; }
+.bb-bar.scrubbing::before, .bb-bar.scrubbing .bb-fill { height: 6px; }
+.wave canvas { touch-action: none; }
+.bb-bar { touch-action: none; }
 .bb-right { display: flex; align-items: center; justify-content: flex-end; gap: 8px; color: var(--muted); }
 .bb-right button { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; flex: none; }
 .bb-right button:hover { color: var(--text); background: var(--card); }

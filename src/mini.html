@@ -81,7 +81,8 @@
     display: flex; align-items: flex-end;
   }
   .bar .rail { width: 100%; height: 3px; background: var(--track); transition: height .12s; }
-  .bar:hover .rail { height: 5px; }
+  .bar:hover .rail, .bar.scrubbing .rail { height: 5px; }
+  .bar { touch-action: none; }
   .bar .fill { height: 100%; width: 0; background: var(--accent); }
   .idle .controls button:not(.play) { opacity: .45; }
 </style>
