@@ -11,6 +11,7 @@ const DEFAULTS = {
   miniAlwaysOnTop: true,
   openAtLogin: false,
   discordPresence: true,
+  adBlock: true,
   lowMemory: true,
   zoom: 1,
   windowBounds: null,

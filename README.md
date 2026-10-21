@@ -12,11 +12,12 @@ Soundfast loads SoundCloud's own web player inside a dedicated app window. You s
 - **Mini player.** A small always-on-top player with artwork, controls, like and a seek bar (`Ctrl+M`).
 - **Taskbar buttons.** Hover Soundfast on the Windows taskbar for previous / play-pause / next buttons.
 - **Discord status.** Shows "Listening to SoundCloud" on your Discord profile with the track, artist, artwork, a progress bar and a "Listen on SoundCloud" button. Clears when you pause. Turn it off in Settings.
+- **Ad blocker.** Blocks SoundCloud's audio ads, banner ads and ad trackers. Built so it adds no memory (and pages use less, since ads never load). Turn it off in Settings.
 - **Light on memory.** Low memory mode (on by default) uses roughly half the memory of a normal browser setup.
 - **Track notifications.** A small notification with the artwork when a new track starts (only while Soundfast isn't focused).
 - **Start with Windows** (optional), starting quietly in the tray.
 - **Links behave.** SoundCloud pages open in the app; everything else opens in your normal browser.
-- **Lightweight on privacy.** No accounts, telemetry or servers of its own. A few third-party analytics trackers are blocked.
+- **Private.** No accounts, telemetry or servers of its own. Third-party analytics trackers are always blocked.
 
 ## Install
 
@@ -79,6 +80,7 @@ On macOS use `Cmd` instead of `Ctrl`. Press `Alt` to show the menu bar.
 Right-click the tray icon (or press `Alt` → **Soundfast** → **Settings**):
 
 - Show what I'm listening to on Discord — on by default
+- Block ads — on by default
 - Close to tray (keep playing) — on by default
 - Notification when the track changes — on by default
 - Mini player always on top — on by default
@@ -101,6 +103,12 @@ Most of the memory goes to SoundCloud's own web player, which is a large web app
 
 In testing this went from 7 processes and ~890 MB to 2 processes and ~400 MB on the same page. If scrolling ever feels sluggish on your PC, turn low memory mode off in Settings.
 
+## Ad blocker
+
+Full ad-blocking filter lists contain tens of thousands of rules and take several MB of memory. Soundfast instead blocks a short list of addresses (`src/adblock.js`): SoundCloud's audio-ad endpoint from [EasyList](https://github.com/easylist/easylist), plus the ad and tracking services observed on soundcloud.com. Chromium checks the list inside its own network code, so it costs no extra memory, and pages use less because ads, ad scripts and ad frames never load. In testing on real SoundCloud on Windows, memory dropped from 272 MB to 196 MB with the blocker on.
+
+Sign-in (Google, Facebook, Apple), reCAPTCHA and SoundCloud's bot protection are never blocked. If SoundCloud starts using a new ad service, add its domain to `AD_DOMAINS` in `src/adblock.js`.
+
 ## Discord status
 
 Soundfast talks only to the Discord app running on your own computer (the same local connection games use). Nothing is sent if Discord isn't open or the setting is off.
@@ -115,6 +123,7 @@ To use your own Discord application (the name people see after "Listening to"), 
 | `src/preload.js` | Runs inside the SoundCloud page: reads what's playing from SoundCloud's player bar and presses its buttons when you use media keys, the tray or the mini player |
 | `src/mini.html`, `src/mini.js` | The mini player |
 | `src/offline.html` | Shown when SoundCloud can't be reached; retries automatically |
+| `src/adblock.js` | Ad and tracker blocking |
 | `src/discord.js` | Discord status, talking directly to the Discord app (no dependencies) |
 | `src/store.js` | Settings file |
 

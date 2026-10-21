@@ -17,6 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const store = require('./store');
 const { DiscordPresence } = require('./discord');
+const adblock = require('./adblock');
 
 const APP_ID = 'com.soundfast.app';
 const HOME_URL = 'https://soundcloud.com/';
@@ -42,6 +43,7 @@ let lastNotifiedKey = '';
 let lastBlur = 0;
 let presence = null;
 let trimTimer = null;
+let adCssKey = null;
 
 // ---------------------------------------------------------------------------
 // Startup
@@ -225,6 +227,10 @@ function createMainWindow() {
   wc.setZoomFactor(store.get('zoom') || 1);
 
   wc.on('did-finish-load', () => wc.setZoomFactor(store.get('zoom') || 1));
+  wc.on('dom-ready', () => {
+    adCssKey = null;
+    applyAdCss();
+  });
 
   // Show a friendly page instead of a blank window when offline.
   wc.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
@@ -326,6 +332,25 @@ function goForward() {
   if (!wc) return;
   const h = wc.navigationHistory;
   if (h ? h.canGoForward() : wc.canGoForward()) h ? h.goForward() : wc.goForward();
+}
+
+async function applyAdCss() {
+  const wc = mainWindow?.webContents;
+  if (!wc || wc.isDestroyed()) return;
+  try {
+    if (store.get('adBlock') && !adCssKey) adCssKey = await wc.insertCSS(adblock.HIDE_CSS);
+    else if (!store.get('adBlock') && adCssKey) {
+      await wc.removeInsertedCSS(adCssKey);
+      adCssKey = null;
+    }
+  } catch {
+    /* page navigating */
+  }
+}
+
+function setAdBlock(on) {
+  adblock.apply(session.fromPartition('persist:soundcloud'), on);
+  applyAdCss();
 }
 
 function setZoom(z) {
@@ -531,6 +556,7 @@ function settingsMenu() {
   });
   const items = [
     toggle(IS_MAC ? 'Keep playing when window is closed' : 'Close to tray (keep playing)', 'closeToTray'),
+    toggle('Block ads', 'adBlock', setAdBlock),
     toggle('Show a notification when the track changes', 'notifications'),
     toggle('Mini player always on top', 'miniAlwaysOnTop', (on) => miniWindow?.setAlwaysOnTop(on)),
   ];
@@ -740,11 +766,10 @@ function debounce(fn, ms) {
 app.whenReady().then(() => {
   nativeTheme.themeSource = 'dark';
 
-  // Block a few third-party analytics trackers. SoundCloud itself, its CDNs,
-  // sign-in providers and its ads are left alone so everything keeps working.
-  const blocked = ['*://*.google-analytics.com/*', '*://*.scorecardresearch.com/*', '*://*.quantserve.com/*'];
+  // Analytics trackers are always blocked; ads are blocked unless turned off
+  // in Settings. See adblock.js: it adds no memory.
   const ses = session.fromPartition('persist:soundcloud');
-  ses.webRequest.onBeforeRequest({ urls: blocked }, (_d, cb) => cb({ cancel: true }));
+  adblock.apply(ses, store.get('adBlock'));
   // Only grant what a music site needs.
   ses.setPermissionRequestHandler((_wc, permission, cb) => {
     cb(['mediaKeySystem', 'notifications', 'clipboard-sanitized-write', 'fullscreen'].includes(permission));
