@@ -1,0 +1,7 @@
+scripts 9 bytes 5985578 client_id true
+near playlistCreate saveFormat:"[a-z]+" ["saveFormat:\"json\""]
+near playlistCreate saveWithWrapper:![01] []
+near playlistCreate resource_type:"[a-z-]+" ["resource_type:\"playlist\""]
+near playlistCreate getAttributesToBeSaved:function\(\)\{[^}]{0,400}\} []
+near playlistCreate toJSON:function\(\)\{[^}]{0,300}\} []
+playlist model head r:function(e){this.onRepost(e)}}];e.exports=r(25).extend(r(524),r(574),r(525),r(568),r(257).withOptions({attr:"title"}),r(328).withOptions({read:"artwork_url",write:"image_data",useFormData:!1}),r(448),r(774),r(205).withOptions({events:o}),{resource_type:"playlist",urnPrefix:"soundcloud:playlists",saveFormat:"json",submodelMap:{tracks:r(27),user:r(41)},soundsCollection:null,_currentSound:null,getSubmodelOptions:function(e){return"user"===e?{parse:!0}:null},setup:function(){this.soundsCollection=new n(null,{playlist:this}),this.listenTo(r(20),"change:currentSound",this._onCurrentSoundChanged),this.listenTo(this.soundsCollection,"error",(function(e,t,n){t instanceof r(303)&&this.removeSound(e)}))},baseUrl:function(){return this.getEndpointUrl("playlist",{id:this.id},{representation:"full"})},destroyUrl:function(){return this.getEndpointUrl("playlistDelete",{id:this.id})},saveUrl:function(){return this.isNew()?this.getEndpointUrl("playlist
