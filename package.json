@@ -5,7 +5,10 @@
   "description": "A lightweight desktop app for SoundCloud on Windows, macOS and Linux.",
   "main": "src/main.js",
   "homepage": "https://github.com/moliwater/soundcloud-desktop-client",
-  "author": "Soundfast contributors",
+  "author": {
+    "name": "moliwater",
+    "email": "moliwater@users.noreply.github.com"
+  },
   "license": "MIT",
   "keywords": [
     "soundcloud",
@@ -67,7 +70,8 @@
         "deb"
       ],
       "icon": "assets/icon-1024.png",
-      "category": "Audio"
+      "category": "Audio",
+      "maintainer": "moliwater <moliwater@users.noreply.github.com>"
     }
   }
 }
