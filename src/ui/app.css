@@ -500,3 +500,5 @@ button.avatar:hover { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--accent); 
 .ctx button svg { width: 16px; height: 16px; color: var(--muted); }
 .ctx button.on svg { color: var(--accent); }
 .ctx-sep { height: 1px; background: var(--line); margin: 4px 6px; }
+
+.err-detail { margin-top: 10px; font-size: 12px; color: var(--faint); user-select: text; }

@@ -148,7 +148,8 @@ async function render() {
   } catch (e) {
     if (token !== renderToken) return;
     console.error(e);
-    view.innerHTML = empty('wifi', "Couldn't reach SoundCloud", navigator.onLine ? 'Something went wrong loading this page.' : 'Check your internet connection.', '<button class="btn primary" data-act="retry">Try again</button>');
+    const why = String((e && e.message) || '').split('Error: ').pop().slice(0, 140);
+    view.innerHTML = empty('wifi', "Couldn't reach SoundCloud", navigator.onLine ? 'Something went wrong loading this page.' : 'Check your internet connection.', `<button class="btn primary" data-act="retry">Try again</button>${why ? `<p class="err-detail">Details: ${esc(why)}</p>` : ''}`);
   }
 }
 

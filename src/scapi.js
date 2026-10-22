@@ -104,20 +104,44 @@ const onPageFetch = (fn) => {
 
 // ---- client id -----------------------------------------------------------
 
+const CLIENT_ID_RE = /client_id["']?\s*[:=]\s*["']([a-zA-Z0-9]{32})["']/;
+
 async function discoverClientId() {
-  const html = await (await httpGet('https://soundcloud.com/')).text();
-  const scripts = [...html.matchAll(/<script[^>]+src="(https:\/\/a-v2\.sndcdn\.com\/assets\/[^"]+\.js)"/g)].map((m) => m[1]);
+  const res = await httpGet('https://soundcloud.com/');
+  if (!res.ok) throw new Error(`SoundCloud's website returned ${res.status}`);
+  const html = await res.text();
+  const inline = html.match(CLIENT_ID_RE) || html.match(/[?&]client_id=([a-zA-Z0-9]{32})/);
+  if (inline) return inline[1];
+  const scripts = [...html.matchAll(/<script[^>]+src="([^"]+\.js)"/g)]
+    .map((m) => m[1])
+    .filter((src) => /sndcdn\.com|soundcloud\.com/.test(src));
+  // The id usually lives in one of the last scripts, so check those first.
   for (const src of scripts.reverse()) {
-    const js = await (await httpGet(src)).text();
-    const m = js.match(/client_id\s*[:=]\s*"([a-zA-Z0-9]{32})"/);
-    if (m) return m[1];
+    try {
+      const js = await (await httpGet(src)).text();
+      const m = js.match(CLIENT_ID_RE);
+      if (m) return m[1];
+    } catch {
+      /* try the next script */
+    }
   }
-  throw new Error('Could not connect to SoundCloud (client id not found)');
+  throw new Error("Couldn't find SoundCloud's client id");
 }
+
+let checkedThisLaunch = false;
 
 async function getClientId(refresh = false) {
   if (!clientId && !refresh) clientId = store.get('scClientId') || null;
-  if (clientId && !refresh) return clientId;
+  if (clientId && !refresh) {
+    // Use the saved id straight away, but check once per launch whether
+    // SoundCloud has a newer one, so it never goes stale.
+    if (!checkedThisLaunch) {
+      checkedThisLaunch = true;
+      getClientId(true).catch(() => {});
+    }
+    return clientId;
+  }
+  checkedThisLaunch = true;
   if (!clientIdPromise) {
     clientIdPromise = discoverClientId()
       .then((id) => {
@@ -178,12 +202,25 @@ async function send(partition, url, init, viaPage) {
   return { status: res.status, text: await res.text().catch(() => '') };
 }
 
+// Puts the current client id in a URL, replacing an old one (links that
+// SoundCloud hands back, like "next page", can carry an outdated one).
+const withClientId = (url, id) =>
+  /[?&]client_id=/.test(url) ? url.replace(/([?&])client_id=[^&#]*/, `$1client_id=${id}`) : url + (url.includes('?') ? '&' : '?') + `client_id=${id}`;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function request(pathOrUrl, opts = {}) {
-  const { method = 'GET', body, form, auth = true, retry = true, verified = false, viaPage = false, partition = active } = opts;
-  const again = (patch) => request(pathOrUrl, { ...opts, method, auth, retry, verified, viaPage, partition, ...patch });
+  const { method = 'GET', body, form, auth = true, retry = true, verified = false, viaPage = false, partition = active, attempt = 0 } = opts;
+  const again = (patch) => request(pathOrUrl, { ...opts, method, auth, retry, verified, viaPage, partition, attempt, ...patch });
   const id = await getClientId();
-  let url = pathOrUrl.startsWith('http') ? pathOrUrl : API + pathOrUrl;
-  if (!/[?&]client_id=/.test(url)) url += (url.includes('?') ? '&' : '?') + `client_id=${id}`;
+  const url = withClientId(pathOrUrl.startsWith('http') ? pathOrUrl : API + pathOrUrl, id);
+  // SoundCloud changes its public client id now and then; sign-ins made with
+  // the new one are refused with the old one. Fetch the current id and retry.
+  const retryWithFreshId = async () => {
+    if (!retry) return null;
+    const fresh = await getClientId(true).catch(() => id);
+    return fresh !== id ? again({ retry: false }) : null;
+  };
   const headers = { 'User-Agent': ua(), Accept: 'application/json, text/plain, */*' };
   const token = auth ? await getToken(partition) : null;
   if (token) headers.Authorization = `OAuth ${token}`;
@@ -195,8 +232,23 @@ async function request(pathOrUrl, opts = {}) {
     headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
     payload = new URLSearchParams(form).toString();
   }
-  const res = await send(partition, url, { method, headers, body: payload }, viaPage);
+  let res;
+  try {
+    res = await send(partition, url, { method, headers, body: payload }, viaPage);
+  } catch (err) {
+    // A brief network hiccup: try reading once more before giving up.
+    if (method === 'GET' && !viaPage && attempt < 1) {
+      await sleep(800);
+      return again({ attempt: attempt + 1 });
+    }
+    if (!viaPage) err.message = `Couldn't connect (${err.message})`;
+    throw err;
+  }
   const isWrite = method !== 'GET';
+  if (res.status === 429 && !isWrite && attempt < 2 && !/captcha-delivery/i.test(res.text)) {
+    await sleep(1500 * (attempt + 1)); // too many requests at once; wait and retry
+    return again({ attempt: attempt + 1 });
+  }
   if (res.status === 403 || res.status === 405 || res.status === 429) {
     // Likes, reposts and comments are checked harder than reading. If the
     // plain request is refused, send it again the way soundcloud.com does.
@@ -220,18 +272,19 @@ async function request(pathOrUrl, opts = {}) {
       err.code = 'BLOCKED';
       throw err;
     }
-    if (res.status === 403 && retry && !token) {
-      await getClientId(true);
-      return again({ retry: false });
+    if (res.status === 403) {
+      const r = await retryWithFreshId();
+      if (r !== null) return r;
     }
     const err = new Error(`SoundCloud returned ${res.status}`);
     err.status = res.status;
     throw err;
   }
-  if (res.status === 401 && retry && !token) {
-    // The public client id rotates now and then; fetch a fresh one once.
-    await getClientId(true);
-    return again({ retry: false });
+  if (res.status === 401) {
+    const r = await retryWithFreshId();
+    if (r !== null) return r;
+    // Same id, so the sign-in itself was refused: still show public pages.
+    if (token && !isWrite) return again({ auth: false, retry: false });
   }
   if (res.status < 200 || res.status > 299) {
     const err = new Error(`SoundCloud returned ${res.status}`);
